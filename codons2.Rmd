@@ -1,0 +1,538 @@
+---
+title: "Codons"
+author: "Izar de Villasante"
+date: "21/5/2022"
+output: html_document
+params: 
+  prefix: "mut"
+  gene_file: "./data-raw/gene.fasta"
+  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,max.print=10,fig.path = "analysis/plots/",fig.dim=c(12,14))
+```
+
+# Load data
+
+```{r}
+codonCounts <- paste0(params$prefix,".codonCounts")
+variantCounts <- paste0(params$prefix,".variantCounts")
+```
+
+
+```{r load data}
+library(data.table)
+#codons<-fread("./data-raw/mut4/PTPN11_trimmed.codonCounts")
+codons<- fread(codonCounts)
+library(Biostrings)
+#protein_fasta<-"./data-raw/protein.fasta"
+#protein<-unlist(Biostrings::readAAStringSet(protein_fasta))
+
+gene_fasta <-params$gene_file
+gene <- Biostrings::readDNAStringSet(gene_fasta)
+wt_seq<-as.character(gene)
+```
+
+
+
+## Variant calls:
+
+
+```{r}
+library(data.table)
+var_counts<-fread(variantCounts,fill=T)
+```
+### Untrusted:
+
+```{r}
+untrusted <- var_counts[ as.numeric(V4) > 3  | V6 > V4 |  V9 %like% "insdel" | V8 %like% "`fs*`" ,]
+sum (untrusted$V1)
+(sum (untrusted$V1)/sum(var_counts$V1) )*100
+```
+### Stop codons:
+
+```{r}
+stopcodons <- var_counts[  endsWith(V8,"X"),]
+(sum(stopcodons$V1) / sum(var_counts$V1) )*100
+```
+
+### Clean varcounts:
+
+```{r}
+clean <- var_counts[!( as.numeric(V4) > 3  | V6 > V4 | V9 %like% "ins"| V9 %like% "del" | V8 %like% "`fs*`" ),]
+codonlist <-tstrsplit(clean$V7,",") 
+```
+
+
+## Wild type:
+
+### Codons:
+
+```{r}
+wt_codons<-sapply(1:594,function(x){
+  end<- x*3     #start + 2
+  start<- end-2      #1+(x-1)*3
+  unname(wt_codon<-substring(wt_seq,start,end))
+})
+
+```
+
+### Amino acids:
+
+```{r}
+ct<- readRDS("ct.RDS")
+setDT(ct)
+setkeyv(ct,"GeneticCode")
+wt_aa <- ct[wt_codons,AminoAcids]
+```
+
+## Plot functions
+```{r}
+
+col_ramp <- function(x,y) circlize::colorRamp2(breaks = x, colors = y)
+col_blue<- function(x) RColorBrewer::brewer.pal(x, "Blues")
+```
+
+
+## Variant calls
+
+
+```{r}
+
+
+# #Create zeros codons count table
+# codons_clean<-data.table(ifelse(codons==0,0,0))
+# 
+
+# #option1 lapply: veryslow
+# library(data.table)
+# #Fill codons table:
+# sapply(1:nrow(clean), function(i){
+#   count=as.numeric(var_counts$V1[i])
+#   
+#   lapply(codonlist,function(mat){
+#     codon<-mat[i]
+#     n<-nchar(codon)
+#       if(!(is.na(codon))){
+#         v<-substring(codon,
+#                 c(1,n-6,n-2),
+#                 c(n-8,n-4,n)
+#                 )
+#         pos<-as.numeric(v[1])
+#         wt<-v[2]
+#         subs<-v[3]
+#         s<-sum(count,with(codons_clean,get(subs))[pos],na.rm = T)
+# 
+#         #codons[pos,(subs):= sum(.SD,..count,na.rm=T),.SDcols=subs]
+#         codons_clean[pos,(subs):=sum(.SD,..count,na.rm=T),.SDcols=subs]
+#         }
+#     })
+# })
+# saveRDS(codons_clean,"data/codons_clean.rds")
+
+# # Option2 parallel slow:
+# library(stringi)
+# library(parallel)
+# library(doParallel)
+# library(foreach)
+# cl<-makeCluster(detectCores()-1)
+# registerDoParallel(cl)
+# foreach(mat=codonlist,.combine = "c" ) %:%
+#   foreach(call=mat
+# 
+# )%dopar%{
+#   
+#     if(!(is.na(call))){
+#       n<-nchar(call)
+#       pos<-substr(call,1,n-8)
+#       subs<-substr(call,n-2,n)
+#       codons_clean[pos,(subs):=sum(.SD,as.numeric(var_counts$V1[i]),na.rm=T),.SDcols=subs]
+#     }
+# }
+# stopCluster(cl)
+
+# Option 3 vectorization and data.table PRO (Very Fast):
+a <- lapply(codonlist,function(x){ stringi::stri_sub_all(x,c(1,-3),c(-9,-1))})
+b<-lapply(a, function(x) cbind(clean$V1,data.table(do.call(rbind,x))))
+ce<-rbindlist(b)
+names(ce)<-c("count","pos","subs")
+d<-ce[,sum(count),by=c("pos","subs")]
+codons_clean<-dcast(d,as.numeric(pos)~subs,value.var = "V1",fun.aggregate = sum)
+codons_clean<-codons_clean[-1,]#Remove first row that belongs to NA
+codons_clean<-codons_clean[,.SD,.SDcols=intersect(names(codons_clean),ct$GeneticCode)]
+
+```
+
+### Codons:
+
+```{r}
+setkeyv(ct,"GeneticCode")
+nct<-data.table(ct[,sapply(GeneticCode, function(x){
+  cod1<-unlist(ct[x,1:3])
+  apply(ct[,1:3],1,function(y){
+     sum(cod1!=y)
+     # print(cod1)
+     # print(y)
+     # print(sum(cod1!=y))
+   })
+  })])
+
+nct$GeneticCode<-colnames(nct)
+nct[,AminoAcids:=ct[nct$GeneticCode,AminoAcids]]
+dict<-melt(nct,id.vars = c("GeneticCode","AminoAcids"),variable.name = "codon_sub",value.name = "dist")
+dict$aa_sub<-ct[as.character(dict$codon_sub),"AminoAcids"]
+```
+
+### Merging all together:
+
+
+```{r}
+## Codon counts:
+codons_main<-codons_clean
+codons_main$wt_codons <- wt_codons[-length(wt_codons)]
+codons_main$wt_aa <- wt_aa[-length(wt_aa)]
+codons_main[,pos:=1:.N]
+
+codons_long<-melt(codons_main,
+                  id.vars=c("pos","wt_codons","wt_aa"),
+                  variable.name = "codon_sub",
+                  value.name = "codon_counts"
+                  )
+setkey(ct,"AminoAcids")
+# Amino Acids counts:
+ aa_main<-as.data.table(sapply(unique(ct$AminoAcids), function(aa){
+  cols <- names(codons_clean) %in% ct[aa,GeneticCode]
+    rowSums(codons_clean[,
+                 names(codons_clean) %in% ct[aa,GeneticCode]
+                 ,with=FALSE
+                 ]
+            )
+    })
+  )
+aa_main$wt_codons <- wt_codons[-length(wt_codons)]
+aa_main$wt_aa <- wt_aa[-length(wt_aa)]
+aa_main[,pos:=1:.N]
+
+aa_long<-melt(aa_main,
+                  id.vars=c("pos","wt_codons","wt_aa"),
+                  variable.name = "aa_sub",
+                  value.name = "aa_counts"
+                  )
+
+setkeyv(codons_long,c("wt_aa","wt_codons","pos"))
+setkeyv(aa_long,c("wt_aa","wt_codons","pos"))
+
+## Merge:
+long_codons_aa <- merge(codons_long,aa_long,allow.cartesian=T)
+names(dict)[1:2]<-c("wt_codons","wt_aa")
+main <- merge(dict,long_codons_aa,by=c("wt_aa","wt_codons","codon_sub","aa_sub"))
+
+# saveRDS(main,"data/main.rds")
+```
+
+
+### Codon changes plot:
+
+```{r}
+library(ComplexHeatmap)
+n<- length(unique(ct$AA))#21#length(colnames(rel_counts)[-1])
+#pals::pal.bands(pals::alphabet(n))
+aa_cols<-pals::alphabet(n)
+names(aa_cols)<-unique(ct$AminoAcids)
+ha_column = HeatmapAnnotation(
+  
+    AA = ct$AminoAcids,
+    
+    # study = pheno.i$study,
+    # PTCRA = (pheno.i$PTCRA.mean -min(pheno.i$PTCRA.mean))/diff(range(pheno.i$PTCRA.mean)),
+    # APAF1 = (pheno.i$APAF1.mean -min(pheno.i$APAF1.mean))/diff(range(pheno.i$APAF1.mean)),
+                                                              
+    col = #A list of named vectors were names = vector values and value = color.
+      list(
+      AA = aa_cols
+      
+    )
+   
+)
+
+```
+```{r}
+col<-RColorBrewer::brewer.pal(4, "Blues")
+names(col)<-0:3
+```
+
+
+```{r, fig.height=14, fig.width=14}
+library(ComplexHeatmap)
+heat<-Heatmap(as.matrix(
+  nct[,.SD,.SDcols=setdiff(names(nct),c("GeneticCode", "AminoAcids"))]
+), 
+        #Color:
+        col=  RColorBrewer::brewer.pal(4, "Blues"),#viridis::magma(4),#col_fun, # Color defined in col_fun above
+        #na_col="grey",
+        #Rows:
+        #row_order = ,
+        show_row_names = T,
+        row_title = "Codons",
+        row_names_side = "left",
+        cluster_rows=F,
+        #row_names_max_width = unit(1, "cm"),
+        row_names_gp = gpar(fontsize = 6),
+        
+        #left_annotation = ha_boxplot,
+
+        # clustering_distance_rows = "manhattan",
+
+        #Columns:
+        show_column_names = T,
+        column_names_side = "top",
+        column_title_side = "top",
+        column_names_max_height = unit(6, "cm"),
+        column_names_gp = gpar(fontsize = 6),
+        column_names_rot = 60,
+        cluster_columns=F,
+        #cluster_columns = dend, #Pre-calculated Distance matrix to use
+        # clustering_distance_columns = "manhattan", #kmeans clustering
+        #column_km = 5, # Cluster groups
+        column_title = "Codons",
+
+        #column_split=5,
+
+        #Annotation bar:
+        top_annotation = ha_column,
+
+        #Aspect ratios:
+        #column_dend_height=unit(4, "cm")
+
+            )
+print(heat)
+
+```
+```{r}
+sub_counts <- main[,sum(codon_counts),by=c("wt_codons","codon_sub")]
+codon_htplot <- as.matrix(dcast(sub_counts,wt_codons~codon_sub,value.var = "V1"),rownames="wt_codons")
+codon_htplot/rowSums(codon_htplot)->codon_htplot
+#main[,sum(codon_counts),by=c("pos")]
+```
+
+```{r,fig.height=14,fig.width=12}
+library(ComplexHeatmap)
+heat_codon_count<-Heatmap(codon_htplot, 
+        #Color:
+        col= RColorBrewer::brewer.pal(1000, "Blues") ,#viridis::magma(4),#col_fun, # Color defined in col_fun above
+        #na_col="grey",
+        #Rows:
+        #row_order = ,
+        show_row_names = T,
+        row_title = "Wild type / reference codons",
+        row_names_side = "left",
+        cluster_rows=F,
+        #row_names_max_width = unit(1, "cm"),
+        row_names_gp = gpar(fontsize = 12),
+        
+        #left_annotation = ha_boxplot,
+
+        # clustering_distance_rows = "manhattan",
+
+        #Columns:
+        show_column_names = T,
+        column_names_side = "top",
+        column_title_side = "top",
+        column_names_max_height = unit(4, "cm"),
+        column_names_gp = gpar(fontsize = 12),
+        column_names_rot = 60,
+        cluster_columns=F,
+        #cluster_columns = dend, #Pre-calculated Distance matrix to use
+        # clustering_distance_columns = "manhattan", #kmeans clustering
+        #column_km = 5, # Cluster groups
+        column_title = "Overall codon conversion heatmap",
+        column_title_gp = gpar(fontsize = 32, fontface = "bold"),
+
+        #column_split=5,
+
+        #Annotation bar:
+        top_annotation = ha_column,
+
+        #Aspect ratios:
+        #column_dend_height=unit(4, "cm")
+
+            )
+print(heat_codon_count)
+
+```
+
+## Amino acid changes:
+
+### Similarity aa heatmap:
+
+```{r}
+
+aa_sim <- main[,min(dist),by=c("wt_aa","aa_sub")]
+aa_sim <- as.matrix(dcast(aa_sim,wt_aa~aa_sub,value.var = "V1"),rownames = "wt_aa")
+
+```
+
+```{r}
+library(ComplexHeatmap)
+heat<-Heatmap(as.matrix(aa_sim), 
+        #Color:
+        col= RColorBrewer::brewer.pal(4, "Blues") ,#viridis::magma(4),#col_fun, # Color defined in col_fun above
+        #na_col="grey",
+        #Rows:
+        #row_order = ,
+        show_row_names = T,
+        row_title = "Amino Acids",
+        row_names_side = "left",
+        cluster_rows=F,
+        #row_names_max_width = unit(1, "cm"),
+        row_names_gp = gpar(fontsize = 4),
+        
+        #left_annotation = ha_boxplot,
+
+        # clustering_distance_rows = "manhattan",
+
+        #Columns:
+        show_column_names = T,
+        column_names_side = "top",
+        column_title_side = "top",
+        column_names_max_height = unit(2, "cm"),
+        column_names_gp = gpar(fontsize = 4),
+        column_names_rot = 60,
+        cluster_columns=F,
+        #cluster_columns = dend, #Pre-calculated Distance matrix to use
+        # clustering_distance_columns = "manhattan", #kmeans clustering
+        #column_km = 5, # Cluster groups
+        column_title = "Amino acids",
+
+        #column_split=5,
+
+        #Annotation bar:
+        #top_annotation = ha_column,
+
+        #Aspect ratios:
+        #column_dend_height=unit(4, "cm")
+
+            )
+print(heat)
+
+```
+```{r}
+sub_counts_aa <- main[,sum(aa_counts),by=c("wt_aa","aa_sub")]
+aa_htplot <- as.matrix(dcast(sub_counts_aa,wt_aa~aa_sub,value.var = "V1"),rownames="wt_aa")
+aa_htplot/rowSums(aa_htplot)->aa_htplot
+#main[,sum(codon_counts),by=c("pos")]
+```
+
+ 
+# 
+# ```{r}
+# 
+# aa_change$wt<-wt_aa[-594]
+# aa_mat<-aa_change[,lapply(.SD,sum),by=wt]
+# 
+# aa_htplot<-aa_mat[,.SD/rowSums(.SD)*100,.SDcols=names(aa_mat)[-1]]
+# rn<-aa_mat$wt
+# ord<-match(colnames(aa_htplot),rn)
+# aa_htplot<-as.matrix(aa_htplot[ord,])
+# rownames(aa_htplot)<-rn[ord]
+# storage.mode(aa_htplot)<-"numeric"
+# 
+# #dimnames(codon_htplot)<-list(rn,cl)
+# ```
+# 
+```{r fig.height=14,fig.width=12}
+library(ComplexHeatmap)
+heat_codon_count<-Heatmap(aa_htplot, 
+        #Color:
+        col= RColorBrewer::brewer.pal(1000, "Blues") ,#viridis::magma(4),#col_fun, # Color defined in col_fun above
+        #na_col="grey",
+        #Rows:
+        #row_order = ,
+        show_row_names = T,
+        row_title = "Wild type / reference Amino Acids",
+        row_names_side = "left",
+        cluster_rows=F,
+        #row_names_max_width = unit(1, "cm"),
+        row_names_gp = gpar(fontsize = 12),
+        
+        #left_annotation = ha_boxplot,
+
+        # clustering_distance_rows = "manhattan",
+
+        #Columns:
+        show_column_names = T,
+        column_names_side = "top",
+        column_title_side = "top",
+        column_names_max_height = unit(4, "cm"),
+        column_names_gp = gpar(fontsize = 12),
+        column_names_rot = 60,
+        cluster_columns=F,
+        #cluster_columns = dend, #Pre-calculated Distance matrix to use
+        # clustering_distance_columns = "manhattan", #kmeans clustering
+        #column_km = 5, # Cluster groups
+        column_title = "Overall Observed Amino acid changes",
+
+        #column_split=5,
+
+        #Annotation bar:
+        #top_annotation = ha_column,
+
+        #Aspect ratios:
+        #column_dend_height=unit(4, "cm")
+
+            )
+print(heat_codon_count)
+
+```
+
+
+
+```{r}
+# There is redundency in wt sequence and dict value for aa and codon, 
+#useful to check all is in order:
+all(main$wt_aa == main$wt)
+all(main$wt_codons == main$GeneticCode)
+```
+## Tables
+
+### Codons level:
+
+Overall codon transformation by number of consecutive bases changed:
+
+```{r}
+#Overall codon transformation by number of consecutive bases changed:
+library_eff<-main[,.(observed=sum(codon_counts>0),technical=length(codon_counts>0)),by=c("pos","dist","wt_codons","codon_counts")]
+library_eff[,codon_eff:=round((observed/technical)*100,2),by=c("pos","dist")]
+library_eff[,N_observed_c:=sum(observed),by=c("dist")]
+library_eff[,N_technical_c:=sum(technical),by=c("dist")]
+library_eff[,Total_codon_eff:=mean(codon_eff),by=c("dist")]
+
+
+## Overall AminoAcid changes by number of consecutive bases changed:
+aa_library_eff<-unique(main[,.SD,.SDcols=c("pos","wt_codons","wt_aa","aa_sub","aa_counts","dist")])
+aa_library_eff[,(c("observed_aa","technical_aa")):=
+                 .(observed_aa=sum(aa_counts>0),technical_aa=length(aa_counts>0)),
+               by=c("pos","dist","wt_aa")]
+aa_library_eff[,N_observed_aa:=sum(observed_aa),by=c("dist")]
+aa_library_eff[,N_technical_aa:=sum(technical_aa),by=c("dist")]
+aa_library_eff[,aa_eff:=round((observed_aa/technical_aa)*100,2),by=c("pos","dist")]
+aa_library_eff[,Total_aa_eff:=mean(aa_eff),by=c("dist")]
+setkeyv(library_eff,c("pos","wt_codons","dist"))
+setkeyv(aa_library_eff,c("pos","wt_codons","dist"))
+eff<-merge(library_eff,aa_library_eff,allow.cartesian=T)
+unique(eff[,.SD,.SDcols=c("dist","N_observed_c","N_technical_c","Total_codon_eff","N_observed_aa","N_technical_aa","Total_aa_eff")])
+```
+### AminoAcids Level
+
+
+### Dictionary data set:
+
+```{r}
+
+setkeyv(ct,names(ct)[1:3])
+
+b<-c("A","C","T","G")
+ct[CJ("A",b,b),by=AA]
+```
+
