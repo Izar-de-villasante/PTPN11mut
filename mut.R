@@ -8,7 +8,10 @@ if (length(args)==0) {
 } else if (length(args)==1) {
   # default output file
   args[2] = "gene.fasta"
+  args[3] = "stats.txt"
 } else if (length(args)==2){
+  args[3] = "stats.txt"
+} else if (length(args)==3){
   
 }else stop("more than 2 args is not allowed. arg1 = prefix, arg2= gene fasta")
 
@@ -145,5 +148,5 @@ setkeyv(library_eff,c("pos","wt_codons","dist"))
 setkeyv(aa_library_eff,c("pos","wt_codons","dist"))
 eff<-merge(library_eff,aa_library_eff,allow.cartesian=T)
 eff$N_reads<-n_reads
-unique(eff[,.SD,.SDcols=c("N_reads","dist","N_observed_c","N_technical_c","Total_codon_eff","N_observed_aa","N_technical_aa","Total_aa_eff")])
-
+stats<-unique(eff[,.SD,.SDcols=c("N_reads","dist","N_observed_c","N_technical_c","Total_codon_eff","N_observed_aa","N_technical_aa","Total_aa_eff")])
+fwrite(stats,args[3],append = T,col.names = F)
