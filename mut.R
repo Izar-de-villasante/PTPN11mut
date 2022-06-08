@@ -16,7 +16,7 @@ if (length(args)==0) {
 }else stop("more than 2 args is not allowed. arg1 = prefix, arg2= gene fasta")
 
 
-prefix <- args[1]
+prefix <- "data-raw/mut30M/PTPN11_sub30M"#args[1]
 readCounts<- paste0(prefix,".readCounts")
 codonCounts <- paste0(prefix,".codonCounts")
 variantCounts <- paste0(prefix,".variantCounts")
@@ -127,26 +127,20 @@ names(dict)[1:2]<-c("wt_codons","wt_aa")
 main <- merge(dict,long_codons_aa,by=c("wt_aa","wt_codons","codon_sub","aa_sub"))
 main[,N_reads:=n_reads]
 
-#Overall codon transformation by number of consecutive bases changed:
-library_eff<-main[,.(observed=sum(codon_counts>0),technical=length(codon_counts>0)),by=c("pos","dist","wt_codons","codon_counts")]
-library_eff[,codon_eff:=round((observed/technical)*100,2),by=c("pos","dist")]
-library_eff[,N_observed_c:=sum(observed),by=c("dist")]
+library_eff<-main[,.(
+  observed=sum(codon_counts>0),
+  technical=length(codon_counts>0),
+  observed_aa=sum(aa_counts>0),
+  technical_aa=length(aa_counts>0)),
+          by=c("pos","dist","wt_codons","codon_sub","aa_sub")]
+library_eff[,"N_observed_c":=  sum(observed),by=dist]
 library_eff[,N_technical_c:=sum(technical),by=c("dist")]
-library_eff[,Total_codon_eff:=mean(codon_eff),by=c("dist")]
+library_eff[,Total_codon_eff:=round((N_observed_c/N_technical_c)*100),by=c("dist")]
 
+library_eff[,N_observed_aa:=sum(observed_aa),by=c("dist")]
+library_eff[,N_technical_aa:=sum(technical_aa),by=c("dist")]
+library_eff[,Total_aa_eff:=round((N_observed_aa/N_technical_aa)*100,2),by=c("pos","dist")]
 
-## Overall AminoAcid changes by number of consecutive bases changed:
-aa_library_eff<-unique(main[,.SD,.SDcols=c("pos","wt_codons","wt_aa","aa_sub","aa_counts","dist")])
-aa_library_eff[,(c("observed_aa","technical_aa")):=
-                 .(observed_aa=sum(aa_counts>0),technical_aa=length(aa_counts>0)),
-               by=c("pos","dist","wt_aa")]
-aa_library_eff[,N_observed_aa:=sum(observed_aa),by=c("dist")]
-aa_library_eff[,N_technical_aa:=sum(technical_aa),by=c("dist")]
-aa_library_eff[,aa_eff:=round((observed_aa/technical_aa)*100,2),by=c("pos","dist")]
-aa_library_eff[,Total_aa_eff:=mean(aa_eff),by=c("dist")]
-setkeyv(library_eff,c("pos","wt_codons","dist"))
-setkeyv(aa_library_eff,c("pos","wt_codons","dist"))
-eff<-merge(library_eff,aa_library_eff,allow.cartesian=T)
-eff$N_reads<-n_reads
-stats<-unique(eff[,.SD,.SDcols=c("N_reads","dist","N_observed_c","N_technical_c","Total_codon_eff","N_observed_aa","N_technical_aa","Total_aa_eff")])
+library_eff$N_reads<-n_reads
+stats<-unique(library_eff[,.SD,.SDcols=c("N_reads","dist","N_observed_c","N_technical_c","Total_codon_eff","N_observed_aa","N_technical_aa","Total_aa_eff")])
 fwrite(stats,args[3],append = T,col.names = F)
