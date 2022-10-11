@@ -1,0 +1,382 @@
+---
+title: "PTPN11 mutagenesis"
+author: "Izar de Villasante"
+date: "`r Sys.Date()`"
+categories: ["R"]
+tags: ["R Markdown", "plot", "regression"]
+
+output:
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_depth: 2
+    toc_float: true
+params: 
+  prefix1: "./data-raw/batch2/mut_batch2" 
+  prefix2: "./data-raw/batch1/PTPN11_trimmed" #
+  gene_file: "./data-raw/gene.fasta"
+runtime: shiny
+---
+
+<style>
+.main-container {
+  max-width: 90% !important;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE,
+                      fig.width=20, fig.height=20)
+```
+
+
+
+```{css toc-content, echo = FALSE}
+#TOC {
+  right: 70px;
+  margin: 20px 0px 25px 0px;
+}
+
+.main-container {
+    margin-left: 10px;
+    margin-right: 10px !important;
+    max-width: 98% !important;
+}
+```
+
+
+
+
+# Functions:
+
+In this section the user defined functions for the rest of the project are specified
+
+```{r functions}
+library(circlize)
+library(RColorBrewer)
+library(DT)
+
+# Shannon diversity function to compare homogeneity of mutated proteins for each
+# position of the sequence:
+diversity <-function(x){
+  N = sum(x)
+  p = x/N
+  H = -sum(p*log(p))
+  H
+}
+
+# Color functions:
+#color_function for heatmap continuos scales:
+
+col_fun <- colorRamp2(breaks = c(0.1,0.3,0.4,0.68,1),
+                      c(blues9[9],
+                        blues9[5],
+                        "white",
+                        RColorBrewer::brewer.pal(11,"Paired")[11],
+                        "red")
+                      )
+col_fun2 <- colorRamp2(breaks = c(0,1),
+                      c("white",
+                        "red")
+                      )
+
+make_rel_counts<-function(idvars,LHSvars,RHSvar, value.var, batches,n_batches){
+    
+  if(is.null(n_batches) | length(n_batches != length(batches))) n_batches <- 1:length(batches)
+  aacounts_list <- list()
+  relcounts_list <- list()
+  # new.vars <- with(batches[[1]],unique(get(RHSvar)))
+  for (n in 1:length(n_batches)){
+    
+    aacounts <- batches[[n]][,list( aa_counts= sum(aa_counts), batch=n_batches[n]),by=idvars]
+    names(aacounts)[length(LHSvars)+1]<-value.var
+    aacounts_list[[paste0("aacounts_",n_batches[n])]] <- aacounts
+    
+    rel_counts<- data.table::dcast.data.table(
+      data =aacounts,
+      formula = as.formula(paste(paste(LHSvars,collapse = ' + '), "~", RHSvar)),
+      value.var = value.var
+      )
+    new.vars <- setdiff(colnames(rel_counts), LHSvars)
+    rel_counts[,(new.vars):=.SD/rowSums(.SD),.SDcols = new.vars]
+    relcounts_list[[paste0("rel_counts_b",n_batches[n])]] <- rel_counts
+  }
+  
+  merge_dt<-rbindlist(batches)
+  aacounts_merge<-merge_dt[,list( aa_counts= sum(aa_counts), batch="merge"),by=idvars]
+  rel_counts<- data.table::dcast.data.table(
+      data =aacounts_merge,
+      formula = as.formula(paste(paste(LHSvars,collapse = ' + '), "~", RHSvar)),
+      value.var = value.var
+      )
+  rel_counts[,(new.vars):=.SD/rowSums(.SD),.SDcols = new.vars]
+
+  relcounts_list[["rel_counts_merge"]] <- rel_counts
+  return(rbindlist( relcounts_list))
+}
+
+## Data tables:
+
+myModal <- function() {
+  div(id = "test",
+      modalDialog(downloadButton("download1","Download data as csv"),
+                  br(),
+                  br(),
+                  downloadButton("download2","Download data as excel"),
+                  easyClose = TRUE, title = "Download Table")
+  )
+}
+renderDT<- function(data){
+  
+
+mt  <- DT::renderDataTable(
+                        DT::datatable(
+                            { data},
+                            filter = 'top',
+                            # selection = list(mode = 'multiple', selected = c(1:10), target = 'column', selectable = c(-2, -3)),
+                            fillContainer = F,
+                            # style =  "bootstrap",
+
+                            extensions = 'Buttons',
+
+                            options = list(
+                                paging = TRUE,
+                                searching = TRUE,
+                                fixedColumns = TRUE,
+                                autoWidth = FALSE,
+                                scrollX=TRUE,
+                                digits=4,
+                                ordering = TRUE,
+                                dom = 'Bfrtip',
+                                buttons = list(
+                                  list(
+                                    extend = "collection",
+                                    text = 'download entire dataset',
+                                    action = DT::JS("function ( e, dt, node, config ) {
+                                                    Shiny.setInputValue('test', true, {priority: 'event'});
+                                                    }")
+                                  ),
+                                  'copy',
+                                  'csv',
+                                  'excel'
+                                ),
+
+                            class = "display",
+                            server=TRUE
+                       ),
+                       ) |> formatRound(which(sapply(data,is.double)),4),
+                     
+)
+  shiny::observeEvent(input$test, {
+    print("hello")
+    showModal(myModal())
+  })
+  
+  
+  output$download1 <- shiny::downloadHandler(
+    filename = function() {
+      paste("data-", Sys.Date(), ".csv", sep="")
+    },
+    content = function(file) {
+      write.csv(data, file)
+    }
+  )
+  
+  output$download2 <- shiny::downloadHandler(
+    filename = function() {
+      paste("data-", Sys.Date(), ".xlsx", sep="")
+    },
+    content = function(file) {
+      writexl::write_xlsx(data, file)
+    }
+  )
+  mt
+}
+
+```
+
+
+
+# Load data:
+
+First the codon and aminoacid counts per postion of all batches must be loaded and also the original aminoacid sequence of our protein:
+
+
+```{r load data}
+library(data.table)
+main_b1 <- readRDS(paste0("./data/main_",basename(params$prefix1),".rds"))
+main_b2 <- readRDS(paste0("./data/main_",basename(params$prefix2),".rds"))
+wt_seq<-setorder(main_b1[,unique(pos),by=wt_aa],V1)$wt_aa
+```
+
+
+# Prepare data: 
+
+## annotate batch and merge:
+
+Now we can put together all this data in the same dataset, from now on the `main` dataset. 
+
+
+```{r}
+# add batch and merge:
+main_b1$batch=as.factor(1)
+main_b2$batch=as.factor(2)
+main<-rbind(main_b1,main_b2)
+# # Counts as integers:
+# count_cols <- c("aa_counts","codon_counts")
+# main[,(count_cols):=lapply(.SD, as.integer),.SDcols=count_cols]
+data.table::setorder(main,pos,-aa_counts, -codon_counts)
+#DT::renderDataTable(main,filter="top")
+
+```
+
+This dataset contains the following information:
+
+1. **wt_aa** *(Wildtype amino acid)*: Amino-acid found in the wild type sequence for that position.
+2. **wt_codons** *(Wildtype codon)*: The genetic code in the wild type coding sequence.
+3. **codon_sub** *(codon substitution)*: The genetic code of the altered codon resulting from the mutagenesis process.
+4. **aa_sub** *(amino acid substitution)*: The three-letter symbol of the altered aminoacid. *(translated from the codon substitution)*
+5. **dist** *(mutated bases)*: the number of bases that where changed to go from wt_codons to codon_sub
+6. **change**: The bases that have been mutated *(wildtype)* --to-> *(altered)*.
+7. **pos** *(aminoacid position)*: The position in the protein sequence.
+8. **codon_counts**: The number of times a particular codon alteration has been called by the variation caller tool in a given position of the sequence.
+9. **aa_counts**: The number of times a particular aminoacid substitution has been observed in that give position.
+
+Bear in mind that multiple codons code for the same aminoacid, so aa_counts is the sum of all the codon -> codon alterations that lead to the same aa -> aa alteration.
+
+You can take a look at it in the table below and also download it pressing the download entire dataset button:
+
+```{r}
+# render main data with all the datasets (batch1,batch2...merge)
+mt<-renderDT(main)
+mt
+```
+
+
+
+## Calculate relative aminoacids:
+
+The `aa_counts` & `codon_counts` variables store the number of absolute observations of each alteration for each posisiton. Nevertheless some positions are mutated more often than others, so to get an accurate idea of the conversion rate between different aminoacids, the absolute counts are transformed in relative counts. 
+The next table shows the proportions of each wildtype amino acid mutation into each new resulting aminoacid. Therefore, the conversion between aminoacids can be compared between positions.  
+
+```{r}
+# Function declared above makes one table from multiple main_batch tables and a merged statistic  #####
+idvars<-c("pos","wt_aa","aa_sub") # variables you want to take from main
+LHSvars<-c("batch","pos","wt_aa") # variables with explainatory data
+RHSvar<-"aa_sub"                  # variable you want to expand 
+value.var<-"aa_counts"            # values for the variable to expand can be = RHSvar (default behavior)
+batches<-list(main_b1,main_b2)
+n_batches<-NULL
+############################################
+
+relcounts<-make_rel_counts(idvars,LHSvars,RHSvar, value.var, batches,n_batches)
+data.table::setorder(relcounts,pos,batch)
+# DT::renderDataTable(relcounts,filter="top")
+relcountsDT<-renderDT(relcounts)
+relcountsDT
+
+```
+
+## Split in chunks to better visualize
+
+```{r}
+# number of observations per chunk:
+n_obs_per_chunk <- 100
+
+chunks <- parallel::splitIndices(length(wt_seq), ncl = ceiling(length(wt_seq)/n_obs_per_chunk))
+group<-unlist(lapply(chunks,function(x)rep(paste("pos:",paste(range(x),collapse = " - ")),length(x) )))
+relcounts$group<-group[relcounts$pos]
+relcounts[,list(aa_pos=length(unique(pos))),by=c("group")]
+```
+
+
+# Color styles
+
+```{r}
+n<- length(unique(main$aa_sub))
+pals::pal.bands(pals::alphabet(n))
+aa_cols<-pals::alphabet(n)
+names(aa_cols)<-unique(main$aa_sub)
+```
+
+## Add colors to data
+
+```{r}
+relcounts$aa_cols<-sapply(
+  relcounts$wt_aa,
+  function(x) unname(aa_cols[which( names(aa_cols) %in% x)])
+)
+names(aa_cols)
+```
+
+# Transform dataset for ggplot:
+
+
+```{r}
+ct<-RGenetics::geneticCodeTable()
+setDT(ct)
+ct<-ct[,.SD,.SDcols=c("AminoAcids","AA")]|>unique()
+
+setkeyv(ct,"AminoAcids")
+wt_aa_one <- ct[wt_seq,c("AA","AminoAcids")]
+wt_aa_one[,idx:=paste(AA,seq_along(1:.N),sep="_")]
+wt_aa_one[,lab:=paste(AA,seq_along(1:.N),sep="_")]
+relcounts$aa_one<- wt_aa_one[relcounts$pos,idx]
+# relcounts$labs<-wt_aa_one[relcounts$pos,paste(AA,AminoAcids,sep=" - ")]
+
+prot_pdata<-data.table::melt.data.table(relcounts,id.vars = c("batch","group","pos","wt_aa","aa_one","aa_cols"))
+
+```
+
+
+## Barplot
+
+```{r, echo=FALSE, fig.height=100}
+library(ggplot2)
+
+
+selectInput("batch", label = "Select batch:",
+              choices = levels(factor(prot_pdata$batch)), selected = "merge")
+selectInput("order", label = "Order of observations:",
+              choices = c("wild type"="pos","AA"="aa_one"), selected = "wild type")
+
+
+pdata <- reactive({
+  dat<- subset(prot_pdata,batch %in% input$batch)
+
+})
+
+
+shiny::renderPlot({
+  ggplot()+
+  ggtitle("Relative amino acid conversion by position.")+
+  
+  geom_bar(data=pdata(),
+           aes(x=factor(.data[[input$order]]),y=value,fill=variable,group=value),
+           stat="identity",
+           position="stack")+
+  scale_fill_manual(values = aa_cols) +
+  # scale_x_discrete(name="Amino acid",labels=paste)+
+  facet_wrap(~group,scales='free',as.table = T,ncol=1)+theme(axis.text.x = element_text(angle = 90))
+  
+  # theme( axis.text.x = element_text(angle = 90),text = element_text(size=14),legend.title=element_blank())
+# })
+},height =(250*length(unique(prot_pdata$group))))
+
+```
+
+
+
+## Conversion diversity
+
+Another way to compare between batches and positions is an entropy or diversity measure, to compare how homogeneous the conversion is between each of the experimental conditions (oligoprimers, pcr conditions, etc.)
+
+```{r}
+tab2<-main[aa_counts > 3,list(N=length(unique(aa_sub)),diversity=diversity(aa_counts)),by=c("pos","batch")]
+ggplot2::ggplot()+
+  geom_line(data=tab2,aes(x=pos,y=diversity))+
+  facet_wrap(~batch,scales='free',as.table = T,ncol=1)
+
+```
+
+

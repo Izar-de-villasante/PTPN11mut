@@ -1,0 +1,15 @@
+batch1,,,,,,,
+N_reads,dist,N_observed_C,N_technical_C,N_observed_aa,N_technical_aa,Total_codon_eff,Total_aa_eff
+100M,1,5337,5337,4300,4300,100,100
+100M,1+2,9969,21348,6270,10349,46.70,60.59
+100M,1+2+3,10025,37359,6281,11860,26.83,52.96
+batch2,,,,,,,
+N_reads,dist,N_observed_C,N_technical_C,N_observed_aa,N_technical_aa,Total_codon_eff,Total_aa_eff
+105M,1,5337,5337,4300,4300,100,100
+105M,1+2,11925,21348,7182,10349,55.86,69.40
+105M,1+2+3,11977,37359,7193,11860,32.06,60.65
+Combined,,,,,,,
+N_reads,dist,N_observed_C,N_technical_C,N_observed_aa,N_technical_aa,Total_codon_eff,Total_aa_eff
+100M + 105M,1,5337,5337,4300,4300,100,100
+100M + 105M,1+2,12616,21348,7437,10349,59.10,71.86
+100M + 105M,1+2+3,12692,37359,7451,11860,33.97,62.82
