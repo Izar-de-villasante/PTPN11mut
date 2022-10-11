@@ -1,0 +1,14 @@
+name: PTPN11mutagenesis
+title: PTPN11mutagenesis
+username:
+account: ijcbit
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 7273288
+bundleId: 6391659
+url: https://ijcbit.shinyapps.io/PTPN11mutagenesis/
+when: 1665495715.60957
+lastSyncTime: 1665495715.60958
+asMultiple: TRUE
+asStatic: FALSE
+ignoredFiles: data-raw/gene.fasta|codons2.Rmd

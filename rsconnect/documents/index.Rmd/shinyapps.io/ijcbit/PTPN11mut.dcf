@@ -1,0 +1,14 @@
+name: PTPN11mut
+title: PTPN11mut
+username:
+account: ijcbit
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 7273262
+bundleId: 6391018
+url: https://ijcbit.shinyapps.io/PTPN11mut/
+when: 1665482105.17582
+lastSyncTime: 1665482105.17583
+asMultiple: TRUE
+asStatic: FALSE
+additionalFiles: data/main_mut_batch2.rds|data/main_PTPN11_trimmed.rds

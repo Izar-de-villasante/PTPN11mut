@@ -23,7 +23,6 @@ resource_files:
 - data/main_mut_batch2.rds
 - data/main_PTPN11_trimmed.rds
 ---
-
 <style>
 .main-container {
   max-width: 100% !important;
@@ -31,8 +30,7 @@ resource_files:
 </style>
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE,
-                      fig.width=20, fig.height=20)
+knitr::opts_chunk$set(echo = TRUE)
 ```
 
 
@@ -49,8 +47,6 @@ knitr::opts_chunk$set(echo = TRUE,
     max-width: 98% !important;
 }
 ```
-
-
 # Report {.tabset}
 
 ## Functions:
@@ -301,35 +297,46 @@ relcountsDT
 
 ```
 
+### Make chunks of data for the plots
+
 Select the number of observations in each chunk:
 
 ```{r}
 ### Split in chunks to better visualize
 
-# number of observations per chunk:
-n_obs_per_chunk <- 100
 
-chunks <- parallel::splitIndices(length(wt_seq), ncl = ceiling(length(wt_seq)/n_obs_per_chunk))
-group<-unlist(lapply(chunks,function(x)rep(paste("pos:",paste(range(x),collapse = " - ")),length(x) )))
-relcounts$group<-group[relcounts$pos]
-relcounts[,list(aa_pos=length(unique(pos))),by=c("group")]
+
+sliderInput("chunk", label = h5("Number of observations per chunk:"), min = 1, 
+        max = max(length(wt_seq)), value = 100)
+
+
+# n_obs_per_chunk <-observeEvent(input$chunk, { 
+# var<<-input$days
+# })
+# print(n_obs_per_chunk)    
+chk <- reactive({
+  chunks<-parallel::splitIndices(length(wt_seq), ncl = ceiling(length(wt_seq)/input$chunk))
+  group<-unlist(lapply(chunks,function(x)rep(paste("pos:",paste(range(x),collapse = " - ")),length(x) )))
+  relcounts$group<-group[relcounts$pos]
+  # rel<-relcounts[,list(n_obs=length(unique(pos))),by=c("group")]
+  relcounts
+})
+
+DT::renderDataTable(DT::datatable({
+  relcounts<-chk()
+  rel<-relcounts[,list(n_obs=length(unique(pos))),by=c("group")]
+  rel
+}))
+
+
 ```
 
-##### Add colors to data
 
-```{r}
-relcounts$aa_cols<-sapply(
-  relcounts$wt_aa,
-  function(x) unname(aa_cols[which( names(aa_cols) %in% x)])
-)
-names(aa_cols)
-```
-
-### Plots 
+### Plots
 
 #### Relative amino acid conversion barplot
 
-In this interactiove plot the fraction of each aminoacid conversion can be explored. Fell free to swap between batches and reordering the sequence either by original protein sequence or by alphabetical order of the aminoacids. 
+In this interactive plot the fraction of each aminoacid conversion can be explored. Fell free to swap between batches and reordering the sequence either by original protein sequence or by alphabetical order of the aminoacids.
 
 ```{r}
 ct<-RGenetics::geneticCodeTable()
@@ -340,34 +347,48 @@ setkeyv(ct,"AminoAcids")
 wt_aa_one <- ct[wt_seq,c("AA","AminoAcids")]
 wt_aa_one[,idx:=paste(AA,seq_along(1:.N),sep="_")]
 wt_aa_one[,lab:=paste(AA,seq_along(1:.N),sep="_")]
-relcounts$aa_one<- wt_aa_one[relcounts$pos,idx]
+# relcounts$aa_one<- wt_aa_one[relcounts$pos,idx]
 # relcounts$labs<-wt_aa_one[relcounts$pos,paste(AA,AminoAcids,sep=" - ")]
 
-prot_pdata<-data.table::melt.data.table(relcounts,id.vars = c("batch","group","pos","wt_aa","aa_one","aa_cols"))
+# prot_pdata<-data.table::melt.data.table(relcounts,id.vars = c("batch","pos","wt_aa","aa_one","aa_cols"))
 
 ```
 
-
 ```{r, echo=FALSE, fig.height=100}
 library(ggplot2)
-
+library(magrittr)
+gg_facet_nrow_ng <- function(p){
+ assertive.types::assert_is_any_of(p, 'ggplot')
+ p %>%
+   ggplot2::ggplot_build() %>%
+   magrittr::extract2('layout') %>% 
+   magrittr::extract2('layout') %>%
+   magrittr::extract2('ROW') %>%
+   unique() %>%
+   length()
+}
 
 selectInput("batch", label = "Select batch:",
-              choices = levels(factor(prot_pdata$batch)), selected = "merge")
+              choices = levels(factor(relcounts$batch)), selected = "merge")
 selectInput("order", label = "Order of observations:",
               choices = c("wild type"="pos","AA"="aa_one"), selected = "wild type")
 
 
 pdata <- reactive({
-  dat<- subset(prot_pdata,batch %in% input$batch)
-
+  relcounts<-subset(chk(), batch == input$batch)
+  relcounts$aa_one<- wt_aa_one[relcounts$pos,idx]
+  relcounts$aa_cols<-sapply(
+  relcounts$wt_aa,
+  function(x) unname(aa_cols[which( names(aa_cols) %in% x)])
+)
+  prot_pdata<-data.table::melt.data.table(relcounts,id.vars = c("batch","group","pos","wt_aa","aa_one","aa_cols"))
+  prot_pdata
 })
 
-
-shiny::renderPlot({
+p1<-reactive({
   ggplot()+
   ggtitle("Relative amino acid conversion by position.")+
-  
+
   geom_bar(data=pdata(),
            aes(x=factor(.data[[input$order]]),y=value,fill=variable,group=value),
            stat="identity",
@@ -375,21 +396,20 @@ shiny::renderPlot({
   scale_fill_manual(values = aa_cols) +
   # scale_x_discrete(name="Amino acid",labels=paste)+
   facet_wrap(~group,scales='free',as.table = T,ncol=1)+theme(axis.text.x = element_text(angle = 90))
-  
-  # theme( axis.text.x = element_text(angle = 90),text = element_text(size=14),legend.title=element_blank())
-# })
-},height =(250*length(unique(prot_pdata$group))))
+})
+
+he <- reactive(gg_facet_nrow_ng(p1()))
+shiny::renderPlot({p1() }, height = function(){he()*200})#height = 4000)
 
 ```
 
 
+## Aminoacid diversity conversion
 
-## Aminoacid diversity conversion 
-
-The above plots are helpful to compare the different alterations/mutations that are observed for for each position in the sequence. Nevertheless, data has been transformed to relative proportions for this purpose and so, it is more complicated to get a general idea on how homogeneus each group may be. 
+The above plots are helpful to compare the different alterations/mutations that are observed for for each position in the sequence. Nevertheless, data has been transformed to relative proportions for this purpose and so, it is more complicated to get a general idea on how homogeneus each group may be.
 A good way to address the heterogeneity in a given set of observations is to compute its diversity. So in the next plot each observation represents the diversity of the mutated aminoacid counts `aa_counts` for each wildtype aminoacid `wt_aa` in the protein of interest.
 
-There are many ways to measure the amino acid conversion diversity in order to compare homogeneity between. One of the most common methods is the shannon diversity index:  
+There are many ways to measure the amino acid conversion diversity in order to compare homogeneity between. One of the most common methods is the shannon diversity index:
 
 $$^{q}\!D={1 \over M_{q-1}}={1 \over {\sqrt[{q-1}]{\sum _{i=1}^{R}p_{i}p_{i}^{q-1}}}}=\left({\sum _{i=1}^{R}p_{i}^{q}}\right)^{1/(1-q)}$$
 
@@ -397,99 +417,67 @@ $$^{q}\!D={1 \over M_{q-1}}={1 \over {\sqrt[{q-1}]{\sum _{i=1}^{R}p_{i}p_{i}^{q-
 ```{r}
 main2<-rbindlist(list(aacounts_merge,merge_dt[,.SD,.SDcols=names(aacounts_merge)]))
 tab2<-main2[aa_counts > 3,list(N=length(unique(aa_sub)),diversity=diversity(aa_counts)),by=c("pos","batch")]
-g<-unique(relcounts[,c("pos","group")])
-setkey(g,pos)
-tab2$group<-g[tab2$pos]$group
+# g<-unique(relcounts[,c("pos","group")])
+# setkey(g,pos)
+# tab2$group<-g[tab2$pos]$group
 ```
 
 
+<!-- ```{r, echo = FALSE} -->
+<!-- library(shiny) -->
+<!-- library(ggplot2) -->
+<!-- library(Cairo)   # For nicer ggplot2 output when deployed on Linux -->
+
+<!-- # https://shiny.rstudio.com/gallery/plot-interaction-selecting-points.html -->
 
 
+<!--   ui <- fluidPage( -->
+<!--     column(8, -->
+<!--       # column(width = 12, -->
+<!--              #box(style='width:400px;overflow-x: scroll;height:400px;overflow-y: scroll;', -->
+<!--                  plotOutput("plot1", height = 400, #height = (250*length(unique(tab2$group))), -->
+<!--                             # Equivalent to: click = clickOpts(id = "plot_click") -->
+<!--                             click = "plot1_click", -->
+<!--                             brush = brushOpts( -->
+<!--                               id = "plot1_brush" -->
+<!--                               ) -->
+<!--                  ) -->
+<!--                             # ) -->
+<!--                  # ) -->
 
-```{r, echo = FALSE}
-library(shiny)
-library(ggplot2)
-library(Cairo)   # For nicer ggplot2 output when deployed on Linux
+<!--     ), -->
+<!--     column(4, -->
+<!--       fluidRow(width = 12, -->
+<!--         h4("Points near click"), -->
+<!--         verbatimTextOutput("click_info") -->
+<!--       ), -->
+<!--       fluidRow(width = 12, -->
+<!--         h4("Brushed points"), -->
+<!--         verbatimTextOutput("brush_info") -->
+<!--       ) -->
+<!--     ) -->
+<!--   ) -->
 
-# https://shiny.rstudio.com/gallery/plot-interaction-selecting-points.html
+<!--   server <- function(input, output) { -->
+<!--     output$plot1 <- renderPlot({ -->
+<!--         p<-ggplot2::ggplot(data=tab2,aes(x=pos,y=diversity,color=batch))+ -->
+<!--         ggplot2::ggtitle("Diversity of aminoacid conversion by position.")+ -->
+<!--         ggplot2::geom_point()+ -->
+<!--         ggplot2::geom_line()+ -->
+<!--         facet_wrap(~group,scales='free',as.table = T,ncol=1)+theme(axis.text.x = element_text(angle = 90)) -->
+<!--         print(p) -->
+<!--     }) -->
+<!--     output$click_info <- renderPrint({ -->
+<!--         # Because it's a ggplot2, we don't need to supply xvar or yvar; if this -->
+<!--         # were a base graphics plot, we'd need those. -->
+<!--         nearPoints(tab2, input$plot1_click, addDist = TRUE) -->
+<!--     }) -->
+<!--     output$brush_info <- renderPrint({ -->
+<!--       brushedPoints(tab2, input$plot1_brush) -->
+<!--     }) -->
 
-
-  ui <- fluidPage(
-    column(8,
-      # column(width = 12,
-             #box(style='width:400px;overflow-x: scroll;height:400px;overflow-y: scroll;',
-                 plotOutput("plot1", height = 400, #height = (250*length(unique(tab2$group))),
-                            # Equivalent to: click = clickOpts(id = "plot_click")
-                            click = "plot1_click",
-                            brush = brushOpts(
-                              id = "plot1_brush"
-                              )
-                 )
-                            # )
-                 # )
-             
-    ),
-    column(4,
-      fluidRow(width = 12,
-        h4("Points near click"),
-        verbatimTextOutput("click_info")
-      ),
-      fluidRow(width = 12,
-        h4("Brushed points"),
-        verbatimTextOutput("brush_info")
-      )
-    )
-  )
-
-  server <- function(input, output) {
-    output$plot1 <- renderPlot({
-        p<-ggplot2::ggplot(data=tab2,aes(x=pos,y=diversity,color=batch))+
-        ggplot2::ggtitle("Diversity of aminoacid conversion by position.")+
-        ggplot2::geom_point()+
-        ggplot2::geom_line()+
-        facet_wrap(~group,scales='free',as.table = T,ncol=1)+theme(axis.text.x = element_text(angle = 90))
-        print(p)
-    })
-    output$click_info <- renderPrint({
-        # Because it's a ggplot2, we don't need to supply xvar or yvar; if this
-        # were a base graphics plot, we'd need those.
-        nearPoints(tab2, input$plot1_click, addDist = TRUE)
-    })
-    output$brush_info <- renderPrint({
-      brushedPoints(tab2, input$plot1_brush)
-    })
-    
-  }
-  
-
-shinyApp(ui, server,options = list( height = 400))
-```
+<!--   } -->
 
 
-
-```{r,echo=FALSE}
-library(shiny)
-library(ggplot2)
-library(Cairo)   # For nicer ggplot2 output when deployed on Linux
-
-
- renderPlot({
-        ggplot2::ggplot(data=tab2,aes(x=pos,y=diversity,color=batch))+
-        ggplot2::ggtitle("Diversity of aminoacid conversion by position.")+
-        ggplot2::geom_point()+
-        ggplot2::geom_line()+
-        facet_wrap(~group,scales='free',as.table = T,ncol=1)+theme(axis.text.x = element_text(angle = 90))
-    })
-renderPrint({
-        # Because it's a ggplot2, we don't need to supply xvar or yvar; if this
-        # were a base graphics plot, we'd need those.
-        nearPoints(tab2, input$plot1_click, addDist = TRUE)
-    })
-renderPrint({
-      brushedPoints(tab2, input$plot1_brush)
-    })
-    
-```
-
-
-
+<!-- shinyApp(ui, server,options = list( height = 400)) -->
+<!-- ``` -->
