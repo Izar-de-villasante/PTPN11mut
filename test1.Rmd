@@ -354,60 +354,60 @@ wt_aa_one[,lab:=paste(AA,seq_along(1:.N),sep="_")]
 
 ```
 
-```{r, echo = FALSE}
-library(rmdexamples)
-kmeans_cluster(iris)
+# ```{r, echo = FALSE}
+# library(rmdexamples)
+# kmeans_cluster(iris)
+# ```
+
+
+```{r, echo=FALSE}
+library(ggplot2)
+library(magrittr)
+gg_facet_nrow_ng <- function(p){
+ assertive.types::assert_is_any_of(p, 'ggplot')
+ p %>%
+   ggplot2::ggplot_build() %>%
+   magrittr::extract2('layout') %>%
+   magrittr::extract2('layout') %>%
+   magrittr::extract2('ROW') %>%
+   unique() %>%
+   length()
+}
+
+selectInput("batch", label = "Select batch:",
+              choices = levels(factor(relcounts$batch)), selected = "merge")
+selectInput("order", label = "Order of observations:",
+              choices = c("wild type"="pos","AA"="aa_one"), selected = "wild type")
+
+
+pdata <- reactive({
+  relcounts<-subset(chk(), batch == input$batch)
+  relcounts$aa_one<- wt_aa_one[relcounts$pos,idx]
+  relcounts$aa_cols<-sapply(
+  relcounts$wt_aa,
+  function(x) unname(aa_cols[which( names(aa_cols) %in% x)])
+)
+  prot_pdata<-data.table::melt.data.table(relcounts,id.vars = c("batch","group","pos","wt_aa","aa_one","aa_cols"))
+  prot_pdata
+})
+
+p1<-reactive({
+  ggplot()+
+  ggtitle("Relative amino acid conversion by position.")+
+
+  geom_bar(data=pdata(),
+           aes(x=factor(.data[[input$order]]),y=value,fill=variable,group=value),
+           stat="identity",
+           position="stack")+
+  scale_fill_manual(values = aa_cols) +
+  # scale_x_discrete(name="Amino acid",labels=paste)+
+  facet_wrap(~group,scales='free',as.table = T,ncol=1)+theme(axis.text.x = element_text(angle = 90))
+})
+
+he <- reactive(gg_facet_nrow_ng(p1()))
+shiny::renderPlot({p1() }, height = function(){he()*100})#height = 4000)
+
 ```
-
-
-<!-- ```{r, echo=FALSE} -->
-<!-- library(ggplot2) -->
-<!-- library(magrittr) -->
-<!-- gg_facet_nrow_ng <- function(p){ -->
-<!--  assertive.types::assert_is_any_of(p, 'ggplot') -->
-<!--  p %>% -->
-<!--    ggplot2::ggplot_build() %>% -->
-<!--    magrittr::extract2('layout') %>%  -->
-<!--    magrittr::extract2('layout') %>% -->
-<!--    magrittr::extract2('ROW') %>% -->
-<!--    unique() %>% -->
-<!--    length() -->
-<!-- } -->
-
-<!-- selectInput("batch", label = "Select batch:", -->
-<!--               choices = levels(factor(relcounts$batch)), selected = "merge") -->
-<!-- selectInput("order", label = "Order of observations:", -->
-<!--               choices = c("wild type"="pos","AA"="aa_one"), selected = "wild type") -->
-
-
-<!-- pdata <- reactive({ -->
-<!--   relcounts<-subset(chk(), batch == input$batch) -->
-<!--   relcounts$aa_one<- wt_aa_one[relcounts$pos,idx] -->
-<!--   relcounts$aa_cols<-sapply( -->
-<!--   relcounts$wt_aa, -->
-<!--   function(x) unname(aa_cols[which( names(aa_cols) %in% x)]) -->
-<!-- ) -->
-<!--   prot_pdata<-data.table::melt.data.table(relcounts,id.vars = c("batch","group","pos","wt_aa","aa_one","aa_cols")) -->
-<!--   prot_pdata -->
-<!-- }) -->
-
-<!-- p1<-reactive({ -->
-<!--   ggplot()+ -->
-<!--   ggtitle("Relative amino acid conversion by position.")+ -->
-
-<!--   geom_bar(data=pdata(), -->
-<!--            aes(x=factor(.data[[input$order]]),y=value,fill=variable,group=value), -->
-<!--            stat="identity", -->
-<!--            position="stack")+ -->
-<!--   scale_fill_manual(values = aa_cols) + -->
-<!--   # scale_x_discrete(name="Amino acid",labels=paste)+ -->
-<!--   facet_wrap(~group,scales='free',as.table = T,ncol=1)+theme(axis.text.x = element_text(angle = 90)) -->
-<!-- }) -->
-
-<!-- he <- reactive(gg_facet_nrow_ng(p1())) -->
-<!-- shiny::renderPlot({p1() }, height = function(){he()*100})#height = 4000) -->
-
-<!-- ``` -->
 
 
 ### Aminoacid diversity conversion
@@ -420,18 +420,18 @@ There are many ways to measure the amino acid conversion diversity in order to c
 $$^{q}\!D={1 \over M_{q-1}}={1 \over {\sqrt[{q-1}]{\sum _{i=1}^{R}p_{i}p_{i}^{q-1}}}}=\left({\sum _{i=1}^{R}p_{i}^{q}}\right)^{1/(1-q)}$$
 
 
-```{r}
-main2<-rbindlist(list(aacounts_merge,merge_dt[,.SD,.SDcols=names(aacounts_merge)]))
-tab2<-main2[aa_counts > 3,list(N=length(unique(aa_sub)),diversity=diversity(aa_counts)),by=c("pos","batch")]
+# ```{r}
+# main2<-rbindlist(list(aacounts_merge,merge_dt[,.SD,.SDcols=names(aacounts_merge)]))
+# tab2<-main2[aa_counts > 3,list(N=length(unique(aa_sub)),diversity=diversity(aa_counts)),by=c("pos","batch")]
 # g<-unique(relcounts[,c("pos","group")])
 # setkey(g,pos)
 # tab2$group<-g[tab2$pos]$group
 ```
 
-```{r, echo = FALSE}
-library(rmdexamples)
-kmeans_cluster(iris)
-```
+# ```{r, echo = FALSE}
+# library(rmdexamples)
+# kmeans_cluster(iris)
+# ```
 
 
 <!-- ```{r, echo = FALSE} -->
