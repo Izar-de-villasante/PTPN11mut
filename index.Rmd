@@ -33,6 +33,10 @@ resource_files:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+```{r}
+library(BiocManager)
+options(repos = BiocManager::repositories())
+```
 
 
 ```{css toc-content, echo = FALSE}
@@ -352,59 +356,109 @@ DT::renderDataTable(DT::datatable({
 In this interactive plot the fraction of each aminoacid conversion can be explored. Fell free to swap between batches and reordering the sequence either by original protein sequence or by alphabetical order of the aminoacids.
 
 ```{r}
+library(data.table)
 ct<-RGenetics::geneticCodeTable()
 setDT(ct)
 ct<-ct[,.SD,.SDcols=c("AminoAcids","AA")]|>unique()
 
 setkeyv(ct,"AminoAcids")
 wt_aa_one <- ct[wt_seq,c("AA","AminoAcids")]
-wt_aa_one[,alfa_idx:=factor(paste(AA,seq_along(1:.N),sep="_"))]
-wt_aa_one[,wt_idx:=paste(AA,seq_along(1:.N),sep="_")]
-wt_aa_one[,wt_idx:=factor(alfa_idx,levels=alfa_idx)]
-# relcounts$aa_one<- wt_aa_one[relcounts$pos,idx]
-# relcounts$labs<-wt_aa_one[relcounts$pos,paste(AA,AminoAcids,sep=" - ")]
-
-# prot_pdata<-data.table::melt.data.table(relcounts,id.vars = c("batch","pos","wt_aa","aa_one","aa_cols"))
-
+wt_aa_one$pos<-1:length(wt_seq)
+wt_aa_one[,idx:=paste(AminoAcids,pos,sep="_")] #string
+wt_aa_one[,alfa_idx:=factor(idx)] #factor default alphabetic sorting
+wt_aa_one[,wt_idx:=factor(idx,levels=idx)] # factor sorted by occurence (wt_seq)
+head(wt_aa_one)
 ```
 
-<!-- # ```{r, echo = FALSE} -->
-<!-- # library(rmdexamples) -->
-<!-- # kmeans_cluster(iris) -->
-<!-- # ``` -->
+<!-- ```{r, echo = FALSE} -->
+<!--  library(rmdexamples) -->
+<!--  kmeans_cluster(iris) -->
+<!-- ``` -->
 
 
-```{r, echo=FALSE}
+
+```{r}
+library( shiny )
+library( shinyWidgets )
 library(ggplot2)
-library(magrittr)
 
 
-selectInput("batch", label = "Select batch:",
-              choices = levels(factor(relcounts$batch)), selected = "merge")
-selectInput("order", label = "Order of observations:",
-              choices = c("wild type"="wt_idx","AA"="alfa_idx"), selected = "wild type")
-sliderInput("height", label = h5("Height:"), min = 50, 
-        max = 500, value = 100)
-
-
-pdata <- reactive({
-  relcounts<-subset(chk(), batch == input$batch)
+ui <- fluidPage(
+  fluidRow(width=12,
+    column(10,
+           fluidRow(width=12,
+                    selectInput("batch", label = "Select batch:",
+                      choices = levels(factor(relcounts$batch)), selected = "merge")
+                    ),
+           fluidRow(width=12,
+                    selectInput("order", label = "Order of observations:",
+                                choices = c("wild type"="wt_idx","AA"="alfa_idx"), selected = "wild type")
   
-  relcounts$aa_one<- wt_aa_one[relcounts$pos,.SD,.SDcols=input$order]
-  relcounts$aa_cols<-sapply(
-  relcounts$wt_aa,
-  function(x) unname(aa_cols[which( names(aa_cols) %in% x)])
+                    
+                    ),
+           fluidRow(width=12,
+                    selectInput("labels", label = "labels:",
+                                choices = c("1AA"="AA","3AA"="AminoAcids","position"="pos","3AA_pos"="wt_idx"), selected = "1AA")
+                    )
+           ),
+    column(2,
+           noUiSliderInput(
+             inputId = "height", label = "Bin height:",
+             min = 50, max = 500, step=1,
+             value = 100, 
+             orientation = "vertical",
+             width = "100px", height = "300px"
+            ),
+    
+    verbatimTextOutput(outputId = "res2")
+     ),
+  
+  ),
+  fluidRow(width=12,
+           plotOutput("plot")#,click = "plot_click")
+           
+           
+           )
 )
-  prot_pdata<-data.table::melt.data.table(relcounts,id.vars = c("batch","group","pos","wt_aa","aa_one","aa_cols"))
-  prot_pdata
-})
-idx <- reactive({
-  
-})
 
-p1<-reactive({
-  ggplot(data=pdata(),
-         aes(x=aa_one,y=value,fill=variable,group=value))+
+server <- function(input, output, session) {
+  
+  rel<- reactive({
+    rc<-subset(chk(), batch == input$batch)
+    rc[,alfa_idx:=factor(paste(wt_aa,pos,sep="_")) ]
+    rc[,wt_idx:=factor(paste(wt_aa,pos,sep="_"),levels = unique(alfa_idx)) ]
+    rc$aa_cols<-sapply(
+    rc$wt_aa,
+    function(x) unname(aa_cols[which( names(aa_cols) %in% x)])
+  )
+    return(rc)
+  })
+  
+  pdata <- reactive({
+    rc<-rel()
+    prot_pdata<-data.table::melt.data.table(rc,id.vars = c("batch","group","wt_aa","alfa_idx","wt_idx","pos","aa_cols"))
+    return(prot_pdata)
+  })
+  
+  breaks<-reactive({
+    rc<-rel()
+    ori_labs<-sapply(levels(factor(rc$group)), function(g){
+      rc[group==g,droplevels(.SD,),.SDcols=input$order]
+    })
+    comb_idx<-unname(unlist(sapply(ori_labs,levels)))
+    return(comb_idx)
+  })
+  
+  labs<-reactive({
+    setkey(wt_aa_one,idx)
+    comb_idx<-breaks()
+    labs<-wt_aa_one[comb_idx,.SD,.SDcols=input$labels][[1]]
+    setNames(labs,comb_idx)
+    return(labs)
+  })
+  
+  p1 <- reactive({ggplot(data=pdata(),
+         aes(x=.data[[input$order]],y=value,fill=variable,group=value))+
            # aes(x=.data[[input$order]],y=value,fill=variable,group=value))+
   ggtitle("Relative amino acid conversion by position.")+
 
@@ -412,14 +466,29 @@ p1<-reactive({
            stat="identity",
            position="stack")+
   scale_fill_manual(values = aa_cols) +
-  # scale_x_discrete(breaks=1:length(wt_seq),labels=wt_seq)+
+  scale_x_discrete( breaks= breaks(), labels=labs())+
   facet_wrap(~group,scales='free',as.table = T,ncol=1)+theme(axis.text.x = element_text(angle = 90),text = element_text(size = 8))
-})
+  })
+  he <- reactive(facet_nrow(p1())) 
+  
+  output$plot <-shiny::renderPlot({p1() }, height = function(){he()*input$height})#height = 4000)
+  
+   
 
-he <- reactive(facet_nrow(p1()))
-shiny::renderPlot({p1() }, height = function(){he()*input$height})#height = 4000)
+  output$info <- renderPrint({
+    req(input$plot_click)
+    x <- round(input$plot_click$x, 2)
+    y <- round(input$plot_click$y, 2)
+    cat("[", x, ", ", y, "]", sep = "")
+  })
+}
+
+shinyApp(ui, server)
+
 
 ```
+
+
 
 
 ### Aminoacid diversity conversion
@@ -431,76 +500,521 @@ There are many ways to measure the amino acid conversion diversity in order to c
 
 $$^{q}\!D={1 \over M_{q-1}}={1 \over {\sqrt[{q-1}]{\sum _{i=1}^{R}p_{i}p_{i}^{q-1}}}}=\left({\sum _{i=1}^{R}p_{i}^{q}}\right)^{1/(1-q)}$$
 
-
-<!-- # ```{r} -->
-<!-- # main2<-rbindlist(list(aacounts_merge,merge_dt[,.SD,.SDcols=names(aacounts_merge)])) -->
-<!-- # tab2<-main2[aa_counts > 3,list(N=length(unique(aa_sub)),diversity=diversity(aa_counts)),by=c("pos","batch")] -->
-<!-- # g<-unique(relcounts[,c("pos","group")]) -->
-<!-- # setkey(g,pos) -->
-<!-- # tab2$group<-g[tab2$pos]$group -->
-<!-- ``` -->
-
 <!-- # ```{r, echo = FALSE} -->
-<!-- # library(rmdexamples) -->
-<!-- # kmeans_cluster(iris) -->
+<!-- #  library(rmdexamples) -->
+<!-- #  kmeans_cluster(iris) -->
 <!-- # ``` -->
 
 
-<!-- <!-- ```{r, echo = FALSE} --> -->
-<!-- <!-- library(shiny) --> -->
-<!-- <!-- library(ggplot2) --> -->
-<!-- <!-- library(Cairo)   # For nicer ggplot2 output when deployed on Linux --> -->
+```{r, echo = FALSE}
+library(shiny)
+library(ggplot2)
+library(Cairo)   # For nicer ggplot2 output when deployed on Linux
 
-<!-- <!-- # https://shiny.rstudio.com/gallery/plot-interaction-selecting-points.html --> -->
-
-
-<!-- <!--   ui <- fluidPage( --> -->
-<!-- <!--     column(8, --> -->
-<!-- <!--       # column(width = 12, --> -->
-<!-- <!--              #box(style='width:400px;overflow-x: scroll;height:400px;overflow-y: scroll;', --> -->
-<!-- <!--                  plotOutput("plot1", height = 400, #height = (250*length(unique(tab2$group))), --> -->
-<!-- <!--                             # Equivalent to: click = clickOpts(id = "plot_click") --> -->
-<!-- <!--                             click = "plot1_click", --> -->
-<!-- <!--                             brush = brushOpts( --> -->
-<!-- <!--                               id = "plot1_brush" --> -->
-<!-- <!--                               ) --> -->
-<!-- <!--                  ) --> -->
-<!-- <!--                             # ) --> -->
-<!-- <!--                  # ) --> -->
-
-<!-- <!--     ), --> -->
-<!-- <!--     column(4, --> -->
-<!-- <!--       fluidRow(width = 12, --> -->
-<!-- <!--         h4("Points near click"), --> -->
-<!-- <!--         verbatimTextOutput("click_info") --> -->
-<!-- <!--       ), --> -->
-<!-- <!--       fluidRow(width = 12, --> -->
-<!-- <!--         h4("Brushed points"), --> -->
-<!-- <!--         verbatimTextOutput("brush_info") --> -->
-<!-- <!--       ) --> -->
-<!-- <!--     ) --> -->
-<!-- <!--   ) --> -->
-
-<!-- <!--   server <- function(input, output) { --> -->
-<!-- <!--     output$plot1 <- renderPlot({ --> -->
-<!-- <!--         p<-ggplot2::ggplot(data=tab2,aes(x=pos,y=diversity,color=batch))+ --> -->
-<!-- <!--         ggplot2::ggtitle("Diversity of aminoacid conversion by position.")+ --> -->
-<!-- <!--         ggplot2::geom_point()+ --> -->
-<!-- <!--         ggplot2::geom_line()+ --> -->
-<!-- <!--         facet_wrap(~group,scales='free',as.table = T,ncol=1)+theme(axis.text.x = element_text(angle = 90)) --> -->
-<!-- <!--         print(p) --> -->
-<!-- <!--     }) --> -->
-<!-- <!--     output$click_info <- renderPrint({ --> -->
-<!-- <!--         # Because it's a ggplot2, we don't need to supply xvar or yvar; if this --> -->
-<!-- <!--         # were a base graphics plot, we'd need those. --> -->
-<!-- <!--         nearPoints(tab2, input$plot1_click, addDist = TRUE) --> -->
-<!-- <!--     }) --> -->
-<!-- <!--     output$brush_info <- renderPrint({ --> -->
-<!-- <!--       brushedPoints(tab2, input$plot1_brush) --> -->
-<!-- <!--     }) --> -->
-
-<!-- <!--   } --> -->
+# https://shiny.rstudio.com/gallery/plot-interaction-selecting-points.html
 
 
-<!-- <!-- shinyApp(ui, server,options = list( height = 400)) --> -->
-<!-- <!-- ``` --> -->
+  ui <- fluidPage(
+    column(8,
+      # column(width = 12,
+             #box(style='width:400px;overflow-x: scroll;height:400px;overflow-y: scroll;',
+                 plotOutput("plot1", height = 400, #height = (250*length(unique(tab2$group))),
+                            # Equivalent to: click = clickOpts(id = "plot_click")
+                            click = "plot1_click",
+                            brush = brushOpts(
+                              id = "plot1_brush"
+                              )
+                 )
+                            # )
+                 # )
+
+    ),
+    column(4,
+      fluidRow(width = 12,
+        h4("Points near click"),
+        verbatimTextOutput("click_info")
+      ),
+      fluidRow(width = 12,
+        h4("Brushed points"),
+        verbatimTextOutput("brush_info")
+      )
+    )
+  )
+
+  server <- function(input, output) {
+    tab2<-readRDS("data/tab2.rds")
+    
+    # tab<-reactive({
+    #   main2<-rbindlist(list(aacounts_merge,merge_dt[,.SD,.SDcols=names(aacounts_merge)]))
+    #   tab2<-main2[aa_counts > 3,list(N=length(unique(aa_sub)),diversity=diversity(aa_counts)),by=c("pos","batch")]
+    #   chunks<-parallel::splitIndices(length(wt_seq), ncl = ceiling(length(wt_seq)/input$chunk))
+    #   group<-unlist(lapply(chunks,function(x)rep(paste("pos:",paste(range(x),collapse = " - ")),length(x) )))
+    #   tab2$group<-group[tab2$pos]
+    #   return(tab2)
+    # })
+    
+    output$plot1 <- renderPlot({
+        ggplot2::ggplot(data=tab2,aes(x=pos,y=diversity,color=batch))+
+        ggplot2::ggtitle("Diversity of aminoacid conversion by position.")+
+        ggplot2::geom_point()+
+        ggplot2::geom_line()+
+        facet_wrap(~group,scales='free',as.table = T,ncol=1)+theme(axis.text.x = element_text(angle = 90))
+        
+    })
+    output$click_info <- renderPrint({
+        # Because it's a ggplot2, we don't need to supply xvar or yvar; if this
+        # were a base graphics plot, we'd need those.
+        nearPoints(tab2, input$plot1_click, addDist = TRUE)
+    })
+    output$brush_info <- renderPrint({
+      brushedPoints(tab2, input$plot1_brush)
+    })
+
+  }
+
+
+shinyApp(ui, server,options = list( height = 400))
+```
+
+```{r}
+library(shiny)
+library(glue)
+library(InteractiveComplexHeatmap)
+library(viridis)
+library(ComplexHeatmap)
+
+readRDS(file = "data/rel_counts.rds")->rel_counts
+heatdata<- rel_counts[,1:21]
+# ha_column = HeatmapAnnotation(
+# 
+#     gene_seq = rel_counts$aa,
+#     mutation_rate = rel_counts$mut_percent,
+#     # study = pheno.i$study,
+#     # PTCRA = (pheno.i$PTCRA.mean -min(pheno.i$PTCRA.mean))/diff(range(pheno.i$PTCRA.mean)),
+#     # APAF1 = (pheno.i$APAF1.mean -min(pheno.i$APAF1.mean))/diff(range(pheno.i$APAF1.mean)),
+# 
+#     col = #A list of named vectors were names = vector values and value = color.
+#       list(
+#       gene_seq = aa_cols,
+#       mutation_rate = col_fun2
+#     )
+# 
+# )
+
+
+heat<-Heatmap(heatdata,
+        #Color:
+        col=viridis(256),#col_fun, # Color defined in col_fun above
+        na_col="grey",
+        #Rows:
+        #row_order = ,
+        show_row_names = T,
+        row_title = "Amino acids",
+        row_names_side = "left",
+        #left_annotation = ha_boxplot,
+
+        # clustering_distance_rows = "manhattan",
+
+        #Columns:
+        show_column_names = T,
+        column_names_side = "bottom",
+        column_title_side = "bottom",
+        column_names_max_height = unit(1, "cm"),
+        column_names_gp = gpar(fontsize = 2),
+        column_names_rot = 60,
+        cluster_columns=F,
+        #cluster_columns = dend, #Pre-calculated Distance matrix to use
+        # clustering_distance_columns = "manhattan", #kmeans clustering
+        #column_km = 5, # Cluster groups
+        column_title = "Samples",
+
+        #column_split=5,
+
+        #Annotation bar:
+        # top_annotation = ha_column,
+
+        #Aspect ratios:
+        #column_dend_height=unit(4, "cm")
+
+            )
+
+
+
+#
+# # Rows annotation:
+# ha_boxplot = HeatmapAnnotation(celltypes = anno_boxplot(mat, height = unit(4, "cm"),
+#     gp = gpar(fill = 1:10)),which = "row")
+#
+# cg<-cutree(clust, k=5)
+#
+
+
+
+  LHSvars<-c("batch","pos","wt_aa") # variables with explainatory data
+  rel<- reactive({
+    rc<-subset(chk(), batch == input$batch)
+    return(rc)
+  })
+  heat_df<-reactive({
+    rc<-rel()
+    heat<-as.matrix(rc[,.SD,.SDcols=setdiff(names(rc),c(LHSvars))])
+    return(heat)
+  })
+  p_heat <- reactive({
+    Heatmap(heat_df(),
+        #Color:
+        col=viridis(256),#col_fun, # Color defined in col_fun above
+        na_col="grey",
+        #Rows:
+        #row_order = ,
+        show_row_names = T,
+        row_title = "Amino acids",
+        row_names_side = "left",
+        #left_annotation = ha_boxplot,
+        #Columns:
+        show_column_names = T,
+        column_names_side = "bottom",
+        column_title_side = "bottom",
+        column_names_max_height = unit(1, "cm"),
+        column_names_gp = gpar(fontsize = 2),
+        column_names_rot = 60,
+        cluster_columns=F,
+        column_title = "Samples",
+            )
+  })
+
+
+
+
+readRDS(file = "data/rel_counts.rds")->rel_counts
+heatdata<- rel_counts[,1:21]
+# ha_column = HeatmapAnnotation(
+# 
+#     gene_seq = rel_counts$aa,
+#     mutation_rate = rel_counts$mut_percent,
+#     # study = pheno.i$study,
+#     # PTCRA = (pheno.i$PTCRA.mean -min(pheno.i$PTCRA.mean))/diff(range(pheno.i$PTCRA.mean)),
+#     # APAF1 = (pheno.i$APAF1.mean -min(pheno.i$APAF1.mean))/diff(range(pheno.i$APAF1.mean)),
+# 
+#     col = #A list of named vectors were names = vector values and value = color.
+#       list(
+#       gene_seq = aa_cols,
+#       mutation_rate = col_fun2
+#     )
+# 
+# )
+
+
+heat<-Heatmap(heatdata,
+        #Color:
+        col=viridis(256),#col_fun, # Color defined in col_fun above
+        na_col="grey",
+        #Rows:
+        #row_order = ,
+        show_row_names = T,
+        row_title = "Amino acids",
+        row_names_side = "left",
+        #left_annotation = ha_boxplot,
+
+        # clustering_distance_rows = "manhattan",
+
+        #Columns:
+        show_column_names = T,
+        column_names_side = "bottom",
+        column_title_side = "bottom",
+        column_names_max_height = unit(1, "cm"),
+        column_names_gp = gpar(fontsize = 2),
+        column_names_rot = 60,
+        cluster_columns=F,
+        #cluster_columns = dend, #Pre-calculated Distance matrix to use
+        # clustering_distance_columns = "manhattan", #kmeans clustering
+        #column_km = 5, # Cluster groups
+        column_title = "Samples",
+
+        #column_split=5,
+
+        #Annotation bar:
+        # top_annotation = ha_column,
+
+        #Aspect ratios:
+        #column_dend_height=unit(4, "cm")
+
+            )
+
+
+
+#
+# # Rows annotation:
+# ha_boxplot = HeatmapAnnotation(celltypes = anno_boxplot(mat, height = unit(4, "cm"),
+#     gp = gpar(fill = 1:10)),which = "row")
+#
+# cg<-cutree(clust, k=5)
+#
+
+
+
+  LHSvars<-c("batch","pos","wt_aa") # variables with explainatory data
+  rel<- reactive({
+    rc<-subset(chk(), batch == input$batch)
+    return(rc)
+  })
+  heat_df<-reactive({
+    rc<-rel()
+    heat<-as.matrix(rc[,.SD,.SDcols=setdiff(names(rc),c(LHSvars))])
+    return(heat)
+  })
+  p_heat <- reactive({
+    Heatmap(heat_df(),
+        #Color:
+        col=viridis(256),#col_fun, # Color defined in col_fun above
+        na_col="grey",
+        #Rows:
+        #row_order = ,
+        show_row_names = T,
+        row_title = "Amino acids",
+        row_names_side = "left",
+        #left_annotation = ha_boxplot,
+        #Columns:
+        show_column_names = T,
+        column_names_side = "bottom",
+        column_title_side = "bottom",
+        column_names_max_height = unit(1, "cm"),
+        column_names_gp = gpar(fontsize = 2),
+        column_names_rot = 60,
+        cluster_columns=F,
+        column_title = "Samples",
+            )
+  })
+
+
+
+
+```
+
+
+```{r}
+# you can copy the following code and paste into your R session, the app runs.
+library(shiny)
+library(glue)
+library(InteractiveComplexHeatmap)
+library(viridis)
+library(ComplexHeatmap)
+
+ui = fluidPage(
+    fluidRow(
+        column(width = 3,
+            plotOutput("main_heatmap", height = 300, width = 300,
+                brush = "ht_brush", click = "ht_click")
+        ),
+        column(width = 3,
+          plotOutput("sub_heatmap", height = 300, width = 300)
+        )
+    ),
+    verbatimTextOutput("ht_click_content")
+)
+
+shiny_env = new.env()
+server = function(input, output) {
+    output$main_heatmap = renderPlot({
+        shiny_env$ht = draw(heat)
+        shiny_env$ht_pos = htPositionsOnDevice(shiny_env$ht)
+    })
+
+    output$sub_heatmap = renderPlot({
+        if(is.null(input$ht_brush)) {
+            grid.newpage()
+            grid.text("No region is selected.", 0.5, 0.5)
+        } else {
+            lt = InteractiveComplexHeatmap::getPositionFromBrush(input$ht_brush)
+            pos1 = lt[[1]]
+            pos2 = lt[[2]]
+            
+            ht = shiny_env$ht
+            pos = selectArea(ht, mark = FALSE, pos1 = pos1, pos2 = pos2, 
+                verbose = FALSE, ht_pos = shiny_env$ht_pos)
+            
+            row_index = unlist(pos[1, "row_index"])
+            column_index = unlist(pos[1, "column_index"])
+            m = ht@ht_list[[1]]@matrix
+            ht_select = Heatmap(m[row_index, column_index, drop = FALSE],
+                col = ht@ht_list[[1]]@matrix_color_mapping@col_fun,
+                show_heatmap_legend = FALSE,
+                cluster_rows = FALSE, cluster_columns = FALSE)
+            draw(ht_select)
+        }
+    })
+
+    output$ht_click_content = renderText({
+        if(is.null(input$ht_click)) {
+            "Not selected."
+        } else {
+            pos1 = InteractiveComplexHeatmap::getPositionFromClick(input$ht_click)
+            
+            ht = shiny_env$ht
+            pos = selectPosition(ht, mark = FALSE, pos = pos1, 
+                verbose = FALSE, ht_pos = shiny_env$ht_pos)
+            
+            row_index = pos[1, "row_index"]
+            column_index = pos[1, "column_index"]
+            m = ht@ht_list[[1]]@matrix
+            v = m[row_index, column_index]
+            
+            glue("row index: {row_index}",
+                 "column index: {column_index}",
+                 "value: {v}", .sep = "\n")
+        }
+    })
+}
+
+shinyApp(ui, server)
+
+```
+
+
+<!-- ```{r} -->
+<!-- library( shiny ) -->
+<!-- library( shinyWidgets ) -->
+<!-- library(ggplot2) -->
+<!-- library(ComplexHeatmap) -->
+
+
+<!-- ui <- fluidPage( -->
+<!--   fluidRow(width=12, -->
+<!--   #   column(10, -->
+<!--   #   #        # fluidRow(width=12, -->
+<!--                     selectInput("batch", label = "Select batch:", -->
+<!--                       choices = levels(factor(relcounts$batch)), selected = "merge") -->
+<!--                     # ), -->
+<!--   #   #        # fluidRow(width=12, -->
+<!--   #   #        #          selectInput("order", label = "Order of observations:", -->
+<!--   #   #        #                      choices = c("wild type"="wt_idx","AA"="alfa_idx"), selected = "wild type") -->
+<!--   #   #        # -->
+<!--   #   #        # -->
+<!--   #   #        #          ), -->
+<!--   #   #        # fluidRow(width=12, -->
+<!--   #   #        #          selectInput("labels", label = "labels:", -->
+<!--   #   #        #                      choices = c("1AA"="AA","3AA"="AminoAcids","position"="pos","3AA_pos"="wt_idx"), selected = "1AA") -->
+<!--   #   #                 ) -->
+<!--   #   #        ), -->
+<!--   #   # # column(2, -->
+<!--   #   #        noUiSliderInput( -->
+<!--   #   #          inputId = "height", label = "Bin height:", -->
+<!--   #   #          min = 50, max = 500, step=1, -->
+<!--   #   #          value = 100, -->
+<!--   #   #          orientation = "vertical", -->
+<!--   #   #          width = "100px", height = "300px" -->
+<!--   #   #         ), -->
+<!--   #   # -->
+<!--   #   # verbatimTextOutput(outputId = "res2") -->
+<!--   #   #  ), -->
+<!--   # -->
+<!--   ), -->
+<!--   fluidRow(width=12, -->
+<!--            plotOutput("plot")#,click = "plot_click") -->
+
+
+<!--            ) -->
+<!--   ) -->
+
+
+<!-- server <- function(input, output, session) { -->
+<!--   LHSvars<-c("batch","pos","wt_aa") # variables with explainatory data -->
+<!--   rel<- reactive({ -->
+<!--     rc<-subset(chk(), batch == input$batch) -->
+<!--     # rc[,alfa_idx:=factor(paste(wt_aa,pos,sep="_")) ] -->
+<!--     # rc[,wt_idx:=factor(paste(wt_aa,pos,sep="_"),levels = unique(alfa_idx)) ] -->
+<!--   #   rc$aa_cols<-sapply( -->
+<!--   #   rc$wt_aa, -->
+<!--   #   function(x) unname(aa_cols[which( names(aa_cols) %in% x)]) -->
+<!--   # ) -->
+<!--     return(rc) -->
+<!--   }) -->
+
+
+<!--   heat_df<-reactive({ -->
+<!--     rc<-rel() -->
+<!--     heat<-as.matrix(rc[,.SD,.SDcols=setdiff(names(rc),c(LHSvars))]) -->
+<!--     return(heat) -->
+<!--   }) -->
+
+
+<!--   # ha_column = reactive({HeatmapAnnotation( -->
+<!--   #     heat_data <-heat_df(), -->
+<!--   #     gene_seq = heat_data$wt_aa, -->
+<!--   #     mutation_rate = heat_data$mut_percent, -->
+<!--   # -->
+<!--   #     col = #A list of named vectors were names = vector values and value = color. -->
+<!--   #       list( -->
+<!--   #       gene_seq = aa_cols, -->
+<!--   #       mutation_rate = col_fun2 -->
+<!--   #     ) -->
+<!--   #   ) -->
+<!--   # }) -->
+
+
+
+
+<!--   p_heat <- reactive({ -->
+<!--     Heatmap(heat_df(), -->
+<!--             # heat_data <-heat_df() -->
+<!--         #Color: -->
+<!--         # col=viridis(256),#col_fun, # Color defined in col_fun above -->
+<!--         na_col="grey", -->
+<!--         #Rows: -->
+<!--         #row_order = , -->
+<!--         show_row_names = T, -->
+<!--         row_title = "Amino acids", -->
+<!--         row_names_side = "left", -->
+<!--         #left_annotation = ha_boxplot, -->
+
+<!--         # clustering_distance_rows = "manhattan", -->
+
+<!--         #Columns: -->
+<!--         show_column_names = T, -->
+<!--         column_names_side = "bottom", -->
+<!--         column_title_side = "bottom", -->
+<!--         column_names_max_height = unit(1, "cm"), -->
+<!--         column_names_gp = gpar(fontsize = 2), -->
+<!--         column_names_rot = 60, -->
+<!--         cluster_columns=F, -->
+<!--         #cluster_columns = dend, #Pre-calculated Distance matrix to use -->
+<!--         # clustering_distance_columns = "manhattan", #kmeans clustering -->
+<!--         #column_km = 5, # Cluster groups -->
+<!--         column_title = "Samples", -->
+
+<!--         #column_split=5, -->
+
+<!--         #Annotation bar: -->
+<!--         # top_annotation = ha_column, -->
+
+<!--         #Aspect ratios: -->
+<!--         #column_dend_height=unit(4, "cm") -->
+
+<!--             ) -->
+<!--   }) -->
+<!--   # he <- reactive(facet_nrow(p1())) -->
+
+<!--   output$plot <-shiny::renderPlot({print(p_heat()) })#, height = 4000)#height = function(){he()*input$height})# -->
+
+
+
+<!--   # output$info <- renderPrint({ -->
+<!--   #   req(input$plot_click) -->
+<!--   #   x <- round(input$plot_click$x, 2) -->
+<!--   #   y <- round(input$plot_click$y, 2) -->
+<!--   #   cat("[", x, ", ", y, "]", sep = "") -->
+<!--   # }) -->
+<!-- } -->
+
+<!-- shinyApp(ui, server) -->
+
+
+<!-- ``` -->
+
+
+
+
+
+
+
+some more text

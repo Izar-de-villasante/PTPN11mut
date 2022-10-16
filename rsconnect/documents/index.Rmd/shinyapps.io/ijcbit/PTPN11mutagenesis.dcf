@@ -5,10 +5,10 @@ account: ijcbit
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 7273288
-bundleId: 6395101
+bundleId: 6408008
 url: https://ijcbit.shinyapps.io/PTPN11mutagenesis/
-when: 1665576527.9045
-lastSyncTime: 1665576527.90451
+when: 1665923410.95314
+lastSyncTime: 1665923410.95315
 asMultiple: TRUE
 asStatic: FALSE
 ignoredFiles: asd.Rmd|data-raw/gene.fasta|codons2.Rmd|index_old.Rmd|test1.Rmd
