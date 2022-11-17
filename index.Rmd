@@ -6,7 +6,7 @@ output:
   html_document:
     code_folding: hide
     toc: yes
-    toc_depth: 5
+    toc_depth: 3
     toc_float: yes
 tags:
 - R Markdown
@@ -14,8 +14,8 @@ tags:
 - regression
 categories: R
 params:
-  prefix1: ./data-raw/batch2/mut_batch2
-  prefix2: ./data-raw/batch1/PTPN11_trimmed
+  prefix2: ./data-raw/batch2/mut_batch2
+  prefix1: ./data-raw/batch1/PTPN11_trimmed
 runtime: shiny
 resource_files:
 - data/main_mut_batch2.rds
@@ -23,34 +23,32 @@ resource_files:
 - data/main_mut_batch2.rds
 - data/main_PTPN11_trimmed.rds
 ---
-<style>
-.main-container {
-  max-width: 100% !important;
-}
-</style>
+
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
+library(Cairo)
 library(BiocManager)
 options(repos = BiocManager::repositories())
+
 ```
 
+<!-- ```{css toc-content, echo = FALSE} -->
+<!-- #TOC { -->
+<!--   right: 70px; -->
+<!--   margin: 20px 0px 25px 0px; -->
+<!-- } -->
 
-```{css toc-content, echo = FALSE}
-#TOC {
-  right: 70px;
-  margin: 20px 0px 25px 0px;
-}
+<!-- .main-container { -->
+<!--     margin-left: 10px; -->
+<!--     margin-right: 10px !important; -->
+<!--     max-width: 90% !important; -->
+<!-- } -->
+<!-- ``` -->
 
-.main-container {
-    margin-left: 10px;
-    margin-right: 10px !important;
-    max-width: 98% !important;
-}
-```
 # Report {.tabset}
 
 ## Functions:
@@ -61,6 +59,189 @@ In this section the user defined functions for the rest of the project are speci
 library(circlize)
 library(RColorBrewer)
 library(DT)
+library(ggplot2)
+library("highcharter")
+library(shinyjs)
+
+rel_barplot <- function(dataset,wt_col="wt_aa") {
+  require(shiny)
+  require(shinyWidgets)
+  require(periscope)
+  require(ggplot2)
+  require(data.table)
+  require(highcharter)
+  #
+  wt_seq<-unique(dataset[,.SD,by="pos",.SDcols=c("pos",wt_col)])[[wt_col]]
+#
+#   ct<-as.data.table(RGenetics::geneticCodeTable())
+#   data.table::setDT(ct)
+#   ct<-ct[,.SD,.SDcols=c("AminoAcids","AA")]|>unique()
+#   setkeyv(ct,"AminoAcids")
+#   wt_aa_one <- ct[wt_seq,c("AA","AminoAcids")]
+#   wt_aa_one$pos<-1:length(wt_seq)
+#   wt_aa_one[,idx:=paste(AminoAcids,pos,sep="_")] #string
+#   wt_aa_one[,alfa_idx:=factor(idx)] #factor default alphabetic sorting
+#   wt_aa_one[,wt_idx:=factor(idx,levels=idx)] # factor sorted by occurence (wt_seq)
+#
+  wt_aa_one<-readRDS("data/wt_aa_one.rds")
+  ui <- fluidPage(
+    useShinyjs(),
+    fluidRow(width=12,
+             column(10,
+                    fluidRow(width=12,
+                             selectInput("batch", label = "Select batch:",
+                                         choices = levels(factor(dataset$batch)), selected = "merge")
+                    ),
+                    fluidRow(width=12,
+                             sliderInput("chunk", label = h5("Number of observations per chunk:"), min = 1,
+                                         max = max(length(wt_seq)), value = 100)
+                    ),
+                    fluidRow(width=12,
+                             selectInput("order", label = "Order of observations:",
+                                         choices = c("wild type"="wt_idx","AA"="alfa_idx"), selected = "wild type")
+
+
+                    ),
+                    fluidRow(width=12,
+                             selectInput("labels", label = "labels:",
+                                         choices = c("1AA"="AA","3AA"="AminoAcids","position"="pos","3AA_pos"="wt_idx"), selected = "1AA")
+                    )
+             ),
+             column(2,
+                    # sliderInput("chunk", label = h5("Number of observations per chunk:"),
+                    #             min = 50,
+                    #             max = 500, value = 100)
+                    noUiSliderInput(
+                      inputId = "height", label = "Bin height:",
+                      min = 50, max = 500, step=1,
+                      value = 100,
+                      orientation = "vertical",
+                      width = "100px", height = "300px"
+                    )
+
+
+             ),
+
+    ),
+    fluidRow(width=12,
+             plotOutput("plot")#,click = "plot_click")
+    ),
+    fluidRow(width=12,
+             downloadButton('downloadPlot', 'Download Plot')
+    )
+ # periscope::downloadablePlotUI("object_id1",
+ #                                downloadtypes = c("png"),
+ #                                download_hovertext = "click me!",
+ #                                height = "1200px",
+ #                                btn_halign = "right"
+ #                                )
+
+
+  )
+
+  server <- function(input, output, session) {
+
+    chk <- reactive({
+      chunks<-parallel::splitIndices(length(wt_seq), ncl = ceiling(length(wt_seq)/input$chunk))
+      group<-unlist(lapply(chunks,function(x)rep(paste("pos:",paste(range(x),collapse = " - ")),length(x) )))
+      dataset$group<-group[dataset$pos]
+      # rel<-dataset[,list(n_obs=length(unique(pos))),by=c("group")]
+      dataset
+    })
+
+    rel<- reactive({
+      rc<-subset(chk(), batch == input$batch)
+      rc[,alfa_idx:=factor(paste(wt_aa,pos,sep="_")) ]
+      rc[,wt_idx:=factor(paste(wt_aa,pos,sep="_"),levels = unique(alfa_idx)) ]
+      rc$aa_cols<-sapply(
+        rc$wt_aa,
+        function(x) unname(aa_cols[which( names(aa_cols) %in% x)])
+      )
+      return(rc)
+    })
+
+    pdata <- reactive({
+      rc<-rel()
+      prot_pdata<-data.table::melt.data.table(rc,id.vars = c("batch","group","wt_aa","alfa_idx","wt_idx","pos","aa_cols"))
+      return(prot_pdata)
+    })
+
+    breaks<-reactive({
+      rc<-rel()
+      ori_labs<-sapply(levels(factor(rc$group)), function(g){
+        rc[group==g,droplevels(.SD,),.SDcols=input$order]
+      })
+      comb_idx<-unname(unlist(sapply(ori_labs,levels)))
+      return(comb_idx)
+    })
+
+    labs<-reactive({
+      setkey(wt_aa_one,idx)
+      comb_idx<-breaks()
+      labs<-wt_aa_one[comb_idx,.SD,.SDcols=input$labels][[1]]
+      setNames(labs,comb_idx)
+      return(labs)
+    })
+
+    p1 <- reactive({ggplot(data=pdata(),
+                           aes(x=.data[[input$order]],y=value,fill=variable,group=value))+
+        # aes(x=.data[[input$order]],y=value,fill=variable,group=value))+
+        ggtitle("Relative amino acid conversion by position.")+
+
+        geom_bar(
+          stat="identity",
+          position="stack")+
+        scale_fill_manual(values = aa_cols) +
+        scale_x_discrete( breaks= breaks(), labels=labs())+
+        facet_wrap(~group,scales='free',as.table = T,ncol=1)+theme(axis.text.x = element_text(angle = 0),text = element_text(size = 8))
+    })
+    he <- reactive(facet_nrow(p1()))
+
+    output$plot <-shiny::renderPlot({p1() }, height = function(){he()*input$height})#height = 4000)
+        output$downloadPlot <- downloadHandler(
+        filename = function() { 'merge_barplot.jpeg' },
+        content = function(file) {
+          device <- function(..., width, height) {
+          # grDevices::svg(..., width = width, height = height,
+          #                family="sans")
+            grDevices::jpeg(...,width=1024, height=768)  
+          }  
+          
+          ggsave(file, plot = p1(), device = device)
+        }
+    )
+        
+    # plotInput = function(){
+    #   p1()
+    # }
+    # 
+    # callModule(
+    #   downloadablePlot,
+    #          "object_id1",
+    #          logger = "",
+    #          filenameroot = "merge_relative",
+    #          aspectratio = 1.33,
+    #          downloadfxns = list(png = plotInput),
+    #          visibleplot = plotInput
+    #   )
+
+
+
+    output$info <- renderPrint({
+      req(input$plot_click)
+      x <- round(input$plot_click$x, 2)
+      y <- round(input$plot_click$y, 2)
+      cat("[", x, ", ", y, "]", sep = "")
+    })
+  }
+
+  shinyApp(ui, server)
+
+
+}
+
+
+
 
 # Shannon diversity function to compare homogeneity of mutated proteins for each
 # position of the sequence:
@@ -74,60 +255,62 @@ diversity <-function(x){
 # Color functions:
 #color_function for heatmap continuos scales:
 
-col_fun <- colorRamp2(breaks = c(0.1,0.3,0.4,0.68,1),
+col_fun <- circlize::colorRamp2(breaks = c(0.1,0.3,0.4,0.68,1),
                       c(blues9[9],
                         blues9[5],
                         "white",
                         RColorBrewer::brewer.pal(11,"Paired")[11],
                         "red")
-                      )
-col_fun2 <- colorRamp2(breaks = c(0,1),
-                      c("white",
-                        "red")
-                      )
+)
+col_fun2 <- circlize::colorRamp2(breaks = c(0,1),
+                       c("white",
+                         "red")
+)
 
-### ggplot
-
+# ### ggplot
+# 
 facet_nrow <- function(p){
- assertive.types::assert_is_any_of(p, 'ggplot')
- p %>%
-   ggplot2::ggplot_build() %>%
-   magrittr::extract2('layout') %>%
-   magrittr::extract2('layout') %>%
-   magrittr::extract2('ROW') %>%
-   unique() %>%
-   length()
+  require(assertive.types)
+  require(magrittr)
+  assertive.types::assert_is_any_of(p, 'ggplot')
+  p %>%
+    ggplot2::ggplot_build() %>%
+    magrittr::extract2('layout') %>%
+    magrittr::extract2('layout') %>%
+    magrittr::extract2('ROW') %>%
+    unique() %>%
+    length()
 }
-
+# 
 make_rel_counts<-function(idvars,LHSvars,RHSvar, value.var, batches,n_batches){
-    
+  require(data.table)
   if(is.null(n_batches) | length(n_batches != length(batches))) n_batches <- 1:length(batches)
   aacounts_list <- list()
   relcounts_list <- list()
   # new.vars <- with(batches[[1]],unique(get(RHSvar)))
   for (n in 1:length(n_batches)){
-    
+
     aacounts <- batches[[n]][,list( aa_counts= sum(aa_counts), batch=n_batches[n]),by=idvars]
     names(aacounts)[length(LHSvars)+1]<-value.var
     aacounts_list[[paste0("aacounts_",n_batches[n])]] <- aacounts
-    
+
     rel_counts<- data.table::dcast.data.table(
       data =aacounts,
       formula = as.formula(paste(paste(LHSvars,collapse = ' + '), "~", RHSvar)),
       value.var = value.var
-      )
+    )
     new.vars <- setdiff(colnames(rel_counts), LHSvars)
     rel_counts[,(new.vars):=.SD/rowSums(.SD),.SDcols = new.vars]
     relcounts_list[[paste0("rel_counts_b",n_batches[n])]] <- rel_counts
   }
-  
+
   merge_dt<-rbindlist(batches)
   aacounts_merge<-merge_dt[,list( aa_counts= sum(aa_counts), batch="merge"),by=idvars]
   rel_counts<- data.table::dcast.data.table(
-      data =aacounts_merge,
-      formula = as.formula(paste(paste(LHSvars,collapse = ' + '), "~", RHSvar)),
-      value.var = value.var
-      )
+    data =aacounts_merge,
+    formula = as.formula(paste(paste(LHSvars,collapse = ' + '), "~", RHSvar)),
+    value.var = value.var
+  )
   rel_counts[,(new.vars):=.SD/rowSums(.SD),.SDcols = new.vars]
 
   relcounts_list[["rel_counts_merge"]] <- rel_counts
@@ -137,18 +320,24 @@ make_rel_counts<-function(idvars,LHSvars,RHSvar, value.var, batches,n_batches){
 ## Data tables:
 
 myModal <- function() {
+  require(shiny)
+  require(writexl)
   div(id = "test",
-      modalDialog(downloadButton("download1","Download data as csv"),
+      shiny::modalDialog(downloadButton("download1","Download data as csv"),
                   br(),
                   br(),
                   downloadButton("download2","Download data as excel"),
                   easyClose = TRUE, title = "Download Table")
   )
 }
-renderDT<- function(data){
-  
 
-mt  <- DT::renderDataTable(
+renderDT<- function(data){
+  require(shiny)
+  ui <- shiny::basicPage(
+  DTOutput("dtable")
+)
+  server <- function(input, output, session){
+  output$dtable <- DT::renderDataTable(
                         DT::datatable(
                             { data},
                             filter = 'top',
@@ -209,12 +398,15 @@ mt  <- DT::renderDataTable(
       writexl::write_xlsx(data, file)
     }
   )
-  mt
+
+
+
+  }
+  shinyApp(ui, server)
 }
 
+
 ```
-
-
 
 ## Prepare data:
 
@@ -226,18 +418,20 @@ First the codon and aminoacid counts per postion of all batches must be loaded a
 library(data.table)
 main_b1 <- readRDS(paste0("./data/main_",basename(params$prefix1),".rds"))
 main_b2 <- readRDS(paste0("./data/main_",basename(params$prefix2),".rds"))
-wt_seq<-setorder(main_b1[,unique(pos),by=wt_aa],V1)$wt_aa
+wt_seq<-data.table::setorder(main_b1[,list(wt_aa = unique(wt_aa)),by=pos],pos)[["wt_aa"]]
+
 ```
 
 ### annotate batch and merge:
 
-Now we can put together all this data in the same dataset, from now on the `main` dataset. 
-
+Now we can put together all this data in the same dataset, from now on the `main` dataset.
 
 ```{r}
 # add batch and merge:
+
 main_b1$batch=as.factor(1)
 main_b2$batch=as.factor(2)
+
 main<-rbind(main_b1,main_b2)
 # # Counts as integers:
 # count_cols <- c("aa_counts","codon_counts")
@@ -250,6 +444,7 @@ data.table::setorder(main,pos,-aa_counts, -codon_counts)
 ## Color styles
 
 ```{r}
+library(pals)
 n<- length(unique(main$aa_sub))
 pals::pal.bands(pals::alphabet(n))
 aa_cols<-pals::alphabet(n)
@@ -260,25 +455,24 @@ names(aa_cols)<-unique(main$aa_sub)
 
 This dataset contains the following information:
 
-1. **wt_aa** *(Wildtype amino acid)*: Amino-acid found in the wild type sequence for that position.
-2. **wt_codons** *(Wildtype codon)*: The genetic code in the wild type coding sequence.
-3. **codon_sub** *(codon substitution)*: The genetic code of the altered codon resulting from the mutagenesis process.
-4. **aa_sub** *(amino acid substitution)*: The three-letter symbol of the altered aminoacid. *(translated from the codon substitution)*
-5. **dist** *(mutated bases)*: the number of bases that where changed to go from wt_codons to codon_sub
-6. **change**: The bases that have been mutated *(wildtype)* --to-> *(altered)*.
-7. **pos** *(aminoacid position)*: The position in the protein sequence.
-8. **codon_counts**: The number of times a particular codon alteration has been called by the variation caller tool in a given position of the sequence.
-9. **aa_counts**: The number of times a particular aminoacid substitution has been observed in that give position.
+1.  **wt_aa** *(Wildtype amino acid)*: Amino-acid found in the wild type sequence for that position.
+2.  **wt_codons** *(Wildtype codon)*: The genetic code in the wild type coding sequence.
+3.  **codon_sub** *(codon substitution)*: The genetic code of the altered codon resulting from the mutagenesis process.
+4.  **aa_sub** *(amino acid substitution)*: The three-letter symbol of the altered aminoacid. *(translated from the codon substitution)*
+5.  **dist** *(mutated bases)*: the number of bases that where changed to go from wt_codons to codon_sub
+6.  **change**: The bases that have been mutated *(wildtype)* --to-\> *(altered)*.
+7.  **pos** *(aminoacid position)*: The position in the protein sequence.
+8.  **codon_counts**: The number of times a particular codon alteration has been called by the variation caller tool in a given position of the sequence.
+9.  **aa_counts**: The number of times a particular aminoacid substitution has been observed in that give position.
 
-Bear in mind that multiple codons code for the same aminoacid, so aa_counts is the sum of all the codon -> codon alterations that lead to the same aa -> aa alteration.
+Bear in mind that multiple codons code for the same aminoacid, so aa_counts is the sum of all the codon -\> codon alterations that lead to the same aa -\> aa alteration.
 
 You can take a look at it in the table below and also download it pressing the download entire dataset button:
 
-```{r}
-mt<-renderDT(main)
-mt
-```
+```{r,echo=FALSE}
+renderDT(main)
 
+```
 
 We are interested mainly in amino acids so we can merge and abbreviate this table as shown below:
 
@@ -293,14 +487,13 @@ mt2
 
 ### Calculate relative aminoacids:
 
-The `aa_counts` & `codon_counts` variables store the number of absolute observations of each alteration for each posisiton. Nevertheless some positions are mutated more often than others, so to get an accurate idea of the conversion rate between different aminoacids, the absolute counts are transformed in relative counts. 
-The next table shows the proportions of each wildtype amino acid mutation into each new resulting aminoacid. Therefore, the conversion between aminoacids can be compared between positions.  
+The `aa_counts` & `codon_counts` variables store the number of absolute observations of each alteration for each posisiton. Nevertheless some positions are mutated more often than others, so to get an accurate idea of the conversion rate between different aminoacids, the absolute counts are transformed in relative counts. The next table shows the proportions of each wildtype amino acid mutation into each new resulting aminoacid. Therefore, the conversion between aminoacids can be compared between positions.
 
 ```{r}
 # Function declared above makes one table from multiple main_batch tables and a merged statistic  #####
 idvars<-c("pos","wt_aa","aa_sub") # variables you want to take from main
 LHSvars<-c("batch","pos","wt_aa") # variables with explainatory data
-RHSvar<-"aa_sub"                  # variable you want to expand 
+RHSvar<-"aa_sub"                  # variable you want to expand
 value.var<-"aa_counts"            # values for the variable to expand can be = RHSvar (default behavior)
 batches<-list(main_b1,main_b2)
 n_batches<-NULL
@@ -322,32 +515,31 @@ Select the number of observations in each chunk:
 ### Split in chunks to better visualize
 
 
-
-sliderInput("chunk", label = h5("Number of observations per chunk:"), min = 1, 
-        max = max(length(wt_seq)), value = 100)
-
-
-# n_obs_per_chunk <-observeEvent(input$chunk, { 
-# var<<-input$days
+# 
+# sliderInput("chunk", label = h5("Number of observations per chunk:"), min = 1,
+#         max = max(length(wt_seq)), value = 100)
+# 
+# 
+# # n_obs_per_chunk <-observeEvent(input$chunk, {
+# # var<<-input$days
+# # })
+# # print(n_obs_per_chunk)
+# chk <- reactive({
+#   chunks<-parallel::splitIndices(length(wt_seq), ncl = ceiling(length(wt_seq)/input$chunk))
+#   group<-unlist(lapply(chunks,function(x)rep(paste("pos:",paste(range(x),collapse = " - ")),length(x) )))
+#   relcounts$group<-group[relcounts$pos]
+#   # rel<-relcounts[,list(n_obs=length(unique(pos))),by=c("group")]
+#   relcounts
 # })
-# print(n_obs_per_chunk)    
-chk <- reactive({
-  chunks<-parallel::splitIndices(length(wt_seq), ncl = ceiling(length(wt_seq)/input$chunk))
-  group<-unlist(lapply(chunks,function(x)rep(paste("pos:",paste(range(x),collapse = " - ")),length(x) )))
-  relcounts$group<-group[relcounts$pos]
-  # rel<-relcounts[,list(n_obs=length(unique(pos))),by=c("group")]
-  relcounts
-})
 
-DT::renderDataTable(DT::datatable({
-  relcounts<-chk()
-  rel<-relcounts[,list(n_obs=length(unique(pos))),by=c("group")]
-  rel
-}))
+# DT::renderDataTable(DT::datatable({
+#   relcounts<-chk()
+#   rel<-relcounts[,list(n_obs=length(unique(pos))),by=c("group")]
+#   rel
+# }))
 
 
 ```
-
 
 ### Plots
 
@@ -356,160 +548,48 @@ DT::renderDataTable(DT::datatable({
 In this interactive plot the fraction of each aminoacid conversion can be explored. Fell free to swap between batches and reordering the sequence either by original protein sequence or by alphabetical order of the aminoacids.
 
 ```{r}
-library(data.table)
-ct<-RGenetics::geneticCodeTable()
-setDT(ct)
-ct<-ct[,.SD,.SDcols=c("AminoAcids","AA")]|>unique()
-
-setkeyv(ct,"AminoAcids")
-wt_aa_one <- ct[wt_seq,c("AA","AminoAcids")]
-wt_aa_one$pos<-1:length(wt_seq)
-wt_aa_one[,idx:=paste(AminoAcids,pos,sep="_")] #string
-wt_aa_one[,alfa_idx:=factor(idx)] #factor default alphabetic sorting
-wt_aa_one[,wt_idx:=factor(idx,levels=idx)] # factor sorted by occurence (wt_seq)
-head(wt_aa_one)
-```
-
-<!-- ```{r, echo = FALSE} -->
-<!--  library(rmdexamples) -->
-<!--  kmeans_cluster(iris) -->
-<!-- ``` -->
-
-
-
-```{r}
-library( shiny )
-library( shinyWidgets )
-library(ggplot2)
-
-
-ui <- fluidPage(
-  fluidRow(width=12,
-    column(10,
-           fluidRow(width=12,
-                    selectInput("batch", label = "Select batch:",
-                      choices = levels(factor(relcounts$batch)), selected = "merge")
-                    ),
-           fluidRow(width=12,
-                    selectInput("order", label = "Order of observations:",
-                                choices = c("wild type"="wt_idx","AA"="alfa_idx"), selected = "wild type")
-  
-                    
-                    ),
-           fluidRow(width=12,
-                    selectInput("labels", label = "labels:",
-                                choices = c("1AA"="AA","3AA"="AminoAcids","position"="pos","3AA_pos"="wt_idx"), selected = "1AA")
-                    )
-           ),
-    column(2,
-           noUiSliderInput(
-             inputId = "height", label = "Bin height:",
-             min = 50, max = 500, step=1,
-             value = 100, 
-             orientation = "vertical",
-             width = "100px", height = "300px"
-            ),
-    
-    verbatimTextOutput(outputId = "res2")
-     ),
-  
-  ),
-  fluidRow(width=12,
-           plotOutput("plot")#,click = "plot_click")
-           
-           
-           )
-)
-
-server <- function(input, output, session) {
-  
-  rel<- reactive({
-    rc<-subset(chk(), batch == input$batch)
-    rc[,alfa_idx:=factor(paste(wt_aa,pos,sep="_")) ]
-    rc[,wt_idx:=factor(paste(wt_aa,pos,sep="_"),levels = unique(alfa_idx)) ]
-    rc$aa_cols<-sapply(
-    rc$wt_aa,
-    function(x) unname(aa_cols[which( names(aa_cols) %in% x)])
-  )
-    return(rc)
-  })
-  
-  pdata <- reactive({
-    rc<-rel()
-    prot_pdata<-data.table::melt.data.table(rc,id.vars = c("batch","group","wt_aa","alfa_idx","wt_idx","pos","aa_cols"))
-    return(prot_pdata)
-  })
-  
-  breaks<-reactive({
-    rc<-rel()
-    ori_labs<-sapply(levels(factor(rc$group)), function(g){
-      rc[group==g,droplevels(.SD,),.SDcols=input$order]
-    })
-    comb_idx<-unname(unlist(sapply(ori_labs,levels)))
-    return(comb_idx)
-  })
-  
-  labs<-reactive({
-    setkey(wt_aa_one,idx)
-    comb_idx<-breaks()
-    labs<-wt_aa_one[comb_idx,.SD,.SDcols=input$labels][[1]]
-    setNames(labs,comb_idx)
-    return(labs)
-  })
-  
-  p1 <- reactive({ggplot(data=pdata(),
-         aes(x=.data[[input$order]],y=value,fill=variable,group=value))+
-           # aes(x=.data[[input$order]],y=value,fill=variable,group=value))+
-  ggtitle("Relative amino acid conversion by position.")+
-
-  geom_bar(
-           stat="identity",
-           position="stack")+
-  scale_fill_manual(values = aa_cols) +
-  scale_x_discrete( breaks= breaks(), labels=labs())+
-  facet_wrap(~group,scales='free',as.table = T,ncol=1)+theme(axis.text.x = element_text(angle = 90),text = element_text(size = 8))
-  })
-  he <- reactive(facet_nrow(p1())) 
-  
-  output$plot <-shiny::renderPlot({p1() }, height = function(){he()*input$height})#height = 4000)
-  
-   
-
-  output$info <- renderPrint({
-    req(input$plot_click)
-    x <- round(input$plot_click$x, 2)
-    y <- round(input$plot_click$y, 2)
-    cat("[", x, ", ", y, "]", sep = "")
-  })
-}
-
-shinyApp(ui, server)
-
+# library(data.table)
+# ct<-RGenetics::geneticCodeTable()
+# setDT(ct)
+# ct<-ct[,.SD,.SDcols=c("AminoAcids","AA")]|>unique()
+# 
+# setkeyv(ct,"AminoAcids")
+# wt_aa_one <- ct[wt_seq,c("AA","AminoAcids")]
+# wt_aa_one$pos<-1:length(wt_seq)
+# wt_aa_one[,idx:=paste(AminoAcids,pos,sep="_")] #string
+# wt_aa_one[,alfa_idx:=factor(idx)] #factor default alphabetic sorting
+# wt_aa_one[,wt_idx:=factor(idx,levels=idx)] # factor sorted by occurence (wt_seq)
+# head(wt_aa_one)
+  wt_aa_one<-readRDS("data/wt_aa_one.rds")
 
 ```
 
+```{r, echo = FALSE}
+ # library(rmdexamples)
+ # kmeans_cluster(iris)
+```
 
+```{r, echo=FALSE}
+  require(shiny)
+  require(shinyWidgets)
+  require(ggplot2)
+  require(data.table)
+rel_barplot(relcounts)
 
+```
 
 ### Aminoacid diversity conversion
 
-The above plots are helpful to compare the different alterations/mutations that are observed for for each position in the sequence. Nevertheless, data has been transformed to relative proportions for this purpose and so, it is more complicated to get a general idea on how homogeneus each group may be.
-A good way to address the heterogeneity in a given set of observations is to compute its diversity. So in the next plot each observation represents the diversity of the mutated aminoacid counts `aa_counts` for each wildtype aminoacid `wt_aa` in the protein of interest.
+The above plots are helpful to compare the different alterations/mutations that are observed for for each position in the sequence. Nevertheless, data has been transformed to relative proportions for this purpose and so, it is more complicated to get a general idea on how homogeneus each group may be. A good way to address the heterogeneity in a given set of observations is to compute its diversity. So in the next plot each observation represents the diversity of the mutated aminoacid counts `aa_counts` for each wildtype aminoacid `wt_aa` in the protein of interest.
 
 There are many ways to measure the amino acid conversion diversity in order to compare homogeneity between. One of the most common methods is the shannon diversity index:
 
 $$^{q}\!D={1 \over M_{q-1}}={1 \over {\sqrt[{q-1}]{\sum _{i=1}^{R}p_{i}p_{i}^{q-1}}}}=\left({\sum _{i=1}^{R}p_{i}^{q}}\right)^{1/(1-q)}$$
 
-<!-- # ```{r, echo = FALSE} -->
-<!-- #  library(rmdexamples) -->
-<!-- #  kmeans_cluster(iris) -->
-<!-- # ``` -->
-
-
 ```{r, echo = FALSE}
 library(shiny)
 library(ggplot2)
-library(Cairo)   # For nicer ggplot2 output when deployed on Linux
+# library(Cairo)   # For nicer ggplot2 output when deployed on Linux
 
 # https://shiny.rstudio.com/gallery/plot-interaction-selecting-points.html
 
@@ -543,7 +623,7 @@ library(Cairo)   # For nicer ggplot2 output when deployed on Linux
 
   server <- function(input, output) {
     tab2<-readRDS("data/tab2.rds")
-    
+
     # tab<-reactive({
     #   main2<-rbindlist(list(aacounts_merge,merge_dt[,.SD,.SDcols=names(aacounts_merge)]))
     #   tab2<-main2[aa_counts > 3,list(N=length(unique(aa_sub)),diversity=diversity(aa_counts)),by=c("pos","batch")]
@@ -552,14 +632,14 @@ library(Cairo)   # For nicer ggplot2 output when deployed on Linux
     #   tab2$group<-group[tab2$pos]
     #   return(tab2)
     # })
-    
+
     output$plot1 <- renderPlot({
         ggplot2::ggplot(data=tab2,aes(x=pos,y=diversity,color=batch))+
         ggplot2::ggtitle("Diversity of aminoacid conversion by position.")+
         ggplot2::geom_point()+
         ggplot2::geom_line()+
         facet_wrap(~group,scales='free',as.table = T,ncol=1)+theme(axis.text.x = element_text(angle = 90))
-        
+
     })
     output$click_info <- renderPrint({
         # Because it's a ggplot2, we don't need to supply xvar or yvar; if this
@@ -576,7 +656,7 @@ library(Cairo)   # For nicer ggplot2 output when deployed on Linux
 shinyApp(ui, server,options = list( height = 400))
 ```
 
-```{r}
+```{r echo = FALSE}
 library(shiny)
 library(glue)
 library(InteractiveComplexHeatmap)
@@ -586,19 +666,19 @@ library(ComplexHeatmap)
 readRDS(file = "data/rel_counts.rds")->rel_counts
 heatdata<- rel_counts[,1:21]
 # ha_column = HeatmapAnnotation(
-# 
+#
 #     gene_seq = rel_counts$aa,
 #     mutation_rate = rel_counts$mut_percent,
 #     # study = pheno.i$study,
 #     # PTCRA = (pheno.i$PTCRA.mean -min(pheno.i$PTCRA.mean))/diff(range(pheno.i$PTCRA.mean)),
 #     # APAF1 = (pheno.i$APAF1.mean -min(pheno.i$APAF1.mean))/diff(range(pheno.i$APAF1.mean)),
-# 
+#
 #     col = #A list of named vectors were names = vector values and value = color.
 #       list(
 #       gene_seq = aa_cols,
 #       mutation_rate = col_fun2
 #     )
-# 
+#
 # )
 
 
@@ -689,19 +769,19 @@ heat<-Heatmap(heatdata,
 readRDS(file = "data/rel_counts.rds")->rel_counts
 heatdata<- rel_counts[,1:21]
 # ha_column = HeatmapAnnotation(
-# 
+#
 #     gene_seq = rel_counts$aa,
 #     mutation_rate = rel_counts$mut_percent,
 #     # study = pheno.i$study,
 #     # PTCRA = (pheno.i$PTCRA.mean -min(pheno.i$PTCRA.mean))/diff(range(pheno.i$PTCRA.mean)),
 #     # APAF1 = (pheno.i$APAF1.mean -min(pheno.i$APAF1.mean))/diff(range(pheno.i$APAF1.mean)),
-# 
+#
 #     col = #A list of named vectors were names = vector values and value = color.
 #       list(
 #       gene_seq = aa_cols,
 #       mutation_rate = col_fun2
 #     )
-# 
+#
 # )
 
 
@@ -791,8 +871,7 @@ heat<-Heatmap(heatdata,
 
 ```
 
-
-```{r}
+```{r, echo=F}
 # you can copy the following code and paste into your R session, the app runs.
 library(shiny)
 library(glue)
@@ -828,11 +907,11 @@ server = function(input, output) {
             lt = InteractiveComplexHeatmap::getPositionFromBrush(input$ht_brush)
             pos1 = lt[[1]]
             pos2 = lt[[2]]
-            
+
             ht = shiny_env$ht
-            pos = selectArea(ht, mark = FALSE, pos1 = pos1, pos2 = pos2, 
+            pos = selectArea(ht, mark = FALSE, pos1 = pos1, pos2 = pos2,
                 verbose = FALSE, ht_pos = shiny_env$ht_pos)
-            
+
             row_index = unlist(pos[1, "row_index"])
             column_index = unlist(pos[1, "column_index"])
             m = ht@ht_list[[1]]@matrix
@@ -849,16 +928,16 @@ server = function(input, output) {
             "Not selected."
         } else {
             pos1 = InteractiveComplexHeatmap::getPositionFromClick(input$ht_click)
-            
+
             ht = shiny_env$ht
-            pos = selectPosition(ht, mark = FALSE, pos = pos1, 
+            pos = selectPosition(ht, mark = FALSE, pos = pos1,
                 verbose = FALSE, ht_pos = shiny_env$ht_pos)
-            
+
             row_index = pos[1, "row_index"]
             column_index = pos[1, "column_index"]
             m = ht@ht_list[[1]]@matrix
             v = m[row_index, column_index]
-            
+
             glue("row index: {row_index}",
                  "column index: {column_index}",
                  "value: {v}", .sep = "\n")
@@ -871,150 +950,52 @@ shinyApp(ui, server)
 ```
 
 
-<!-- ```{r} -->
-<!-- library( shiny ) -->
-<!-- library( shinyWidgets ) -->
-<!-- library(ggplot2) -->
-<!-- library(ComplexHeatmap) -->
 
+### summary tables:
 
-<!-- ui <- fluidPage( -->
-<!--   fluidRow(width=12, -->
-<!--   #   column(10, -->
-<!--   #   #        # fluidRow(width=12, -->
-<!--                     selectInput("batch", label = "Select batch:", -->
-<!--                       choices = levels(factor(relcounts$batch)), selected = "merge") -->
-<!--                     # ), -->
-<!--   #   #        # fluidRow(width=12, -->
-<!--   #   #        #          selectInput("order", label = "Order of observations:", -->
-<!--   #   #        #                      choices = c("wild type"="wt_idx","AA"="alfa_idx"), selected = "wild type") -->
-<!--   #   #        # -->
-<!--   #   #        # -->
-<!--   #   #        #          ), -->
-<!--   #   #        # fluidRow(width=12, -->
-<!--   #   #        #          selectInput("labels", label = "labels:", -->
-<!--   #   #        #                      choices = c("1AA"="AA","3AA"="AminoAcids","position"="pos","3AA_pos"="wt_idx"), selected = "1AA") -->
-<!--   #   #                 ) -->
-<!--   #   #        ), -->
-<!--   #   # # column(2, -->
-<!--   #   #        noUiSliderInput( -->
-<!--   #   #          inputId = "height", label = "Bin height:", -->
-<!--   #   #          min = 50, max = 500, step=1, -->
-<!--   #   #          value = 100, -->
-<!--   #   #          orientation = "vertical", -->
-<!--   #   #          width = "100px", height = "300px" -->
-<!--   #   #         ), -->
-<!--   #   # -->
-<!--   #   # verbatimTextOutput(outputId = "res2") -->
-<!--   #   #  ), -->
-<!--   # -->
-<!--   ), -->
-<!--   fluidRow(width=12, -->
-<!--            plotOutput("plot")#,click = "plot_click") -->
+```{r}
+tec_aa<-c(4300,10349,11860)
+tec_C<-c(5337,21348,37359)
 
+lib_eff<-t(lapply(1:3,function(n){
+  dt1<-data.frame(
+    dist=paste(1:n,collapse = "+"),
+    N_observed_C=sum(main[dist%in%1:n & batch== 1,sum(codon_counts>1),by=c("pos","codon_sub")]$V1 >0),
+    N_technical_C=tec_C[n],
+    N_observed_aa=sum(main[dist%in%1:n & batch== 1,sum(aa_counts>1),by=c("pos","aa_sub")]$V1 >0),
+    N_technical_aa=tec_aa[n],
+    batch=1
+    )
+  dt2<-data.frame(
+    dist=paste(1:n,collapse = "+"),
+    N_observed_C=sum(main[dist%in%1:n & batch== 2,sum(codon_counts>1),by=c("pos","codon_sub")]$V1 >0),
+    N_technical_C=tec_C[n],
+    N_observed_aa=sum(main[dist%in%1:n & batch== 2,sum(aa_counts>1),by=c("pos","aa_sub")]$V1 >0),
+    N_technical_aa=tec_aa[n],
+    batch=2
+    )
+  
+  dt_merge<-data.frame(
+    dist=paste(1:n,collapse = "+"),
+    N_observed_C=sum(main[dist%in%1:n,sum(codon_counts>1),by=c("pos","codon_sub")]$V1 >0),
+    N_technical_C=tec_C[n],
+    N_observed_aa=sum(main[dist%in%1:n,sum(aa_counts>1),by=c("pos","aa_sub")]$V1 >0),
+    N_technical_aa=tec_aa[n],
+    batch="merge"
+    )
+  dt<-rbind(dt1,dt2,dt_merge)
+  dt$Total_codon_eff <-(dt$N_observed_C/dt$N_technical_C)*100
+  dt$Total_aa_eff <- (dt$N_observed_aa/dt$N_technical_aa)*100
+  return(dt)
+}))
+    
+eff2<-as.data.frame(rbindlist(lib_eff))
 
-<!--            ) -->
-<!--   ) -->
+```
 
+```{r}
+renderDT(eff2)
+```
 
-<!-- server <- function(input, output, session) { -->
-<!--   LHSvars<-c("batch","pos","wt_aa") # variables with explainatory data -->
-<!--   rel<- reactive({ -->
-<!--     rc<-subset(chk(), batch == input$batch) -->
-<!--     # rc[,alfa_idx:=factor(paste(wt_aa,pos,sep="_")) ] -->
-<!--     # rc[,wt_idx:=factor(paste(wt_aa,pos,sep="_"),levels = unique(alfa_idx)) ] -->
-<!--   #   rc$aa_cols<-sapply( -->
-<!--   #   rc$wt_aa, -->
-<!--   #   function(x) unname(aa_cols[which( names(aa_cols) %in% x)]) -->
-<!--   # ) -->
-<!--     return(rc) -->
-<!--   }) -->
+some more  stuff
 
-
-<!--   heat_df<-reactive({ -->
-<!--     rc<-rel() -->
-<!--     heat<-as.matrix(rc[,.SD,.SDcols=setdiff(names(rc),c(LHSvars))]) -->
-<!--     return(heat) -->
-<!--   }) -->
-
-
-<!--   # ha_column = reactive({HeatmapAnnotation( -->
-<!--   #     heat_data <-heat_df(), -->
-<!--   #     gene_seq = heat_data$wt_aa, -->
-<!--   #     mutation_rate = heat_data$mut_percent, -->
-<!--   # -->
-<!--   #     col = #A list of named vectors were names = vector values and value = color. -->
-<!--   #       list( -->
-<!--   #       gene_seq = aa_cols, -->
-<!--   #       mutation_rate = col_fun2 -->
-<!--   #     ) -->
-<!--   #   ) -->
-<!--   # }) -->
-
-
-
-
-<!--   p_heat <- reactive({ -->
-<!--     Heatmap(heat_df(), -->
-<!--             # heat_data <-heat_df() -->
-<!--         #Color: -->
-<!--         # col=viridis(256),#col_fun, # Color defined in col_fun above -->
-<!--         na_col="grey", -->
-<!--         #Rows: -->
-<!--         #row_order = , -->
-<!--         show_row_names = T, -->
-<!--         row_title = "Amino acids", -->
-<!--         row_names_side = "left", -->
-<!--         #left_annotation = ha_boxplot, -->
-
-<!--         # clustering_distance_rows = "manhattan", -->
-
-<!--         #Columns: -->
-<!--         show_column_names = T, -->
-<!--         column_names_side = "bottom", -->
-<!--         column_title_side = "bottom", -->
-<!--         column_names_max_height = unit(1, "cm"), -->
-<!--         column_names_gp = gpar(fontsize = 2), -->
-<!--         column_names_rot = 60, -->
-<!--         cluster_columns=F, -->
-<!--         #cluster_columns = dend, #Pre-calculated Distance matrix to use -->
-<!--         # clustering_distance_columns = "manhattan", #kmeans clustering -->
-<!--         #column_km = 5, # Cluster groups -->
-<!--         column_title = "Samples", -->
-
-<!--         #column_split=5, -->
-
-<!--         #Annotation bar: -->
-<!--         # top_annotation = ha_column, -->
-
-<!--         #Aspect ratios: -->
-<!--         #column_dend_height=unit(4, "cm") -->
-
-<!--             ) -->
-<!--   }) -->
-<!--   # he <- reactive(facet_nrow(p1())) -->
-
-<!--   output$plot <-shiny::renderPlot({print(p_heat()) })#, height = 4000)#height = function(){he()*input$height})# -->
-
-
-
-<!--   # output$info <- renderPrint({ -->
-<!--   #   req(input$plot_click) -->
-<!--   #   x <- round(input$plot_click$x, 2) -->
-<!--   #   y <- round(input$plot_click$y, 2) -->
-<!--   #   cat("[", x, ", ", y, "]", sep = "") -->
-<!--   # }) -->
-<!-- } -->
-
-<!-- shinyApp(ui, server) -->
-
-
-<!-- ``` -->
-
-
-
-
-
-
-
-some more text
